@@ -37,7 +37,7 @@
         if (!line.startsWith("data: ")) continue;
         const data = line.slice(6);
         if (data === "[DONE]") { streaming = false; continue; }
-        assistantMsg.content += data;
+        assistantMsg.content += JSON.parse(data);
         messages = messages; // trigger reactivity
       }
     }
