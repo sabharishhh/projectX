@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
 from providers import get_provider
+from memory import fetch_state, build_system_message
 
 load_dotenv()
 
@@ -77,6 +78,10 @@ async def chat(req: ChatRequest):
     save_message(req.conversation_id, "user", req.message)
 
     conversation = history + [{"role": "user", "content": req.message}]
+
+    system_msg = build_system_message(fetch_state())
+    if system_msg:
+        conversation = [system_msg] + conversation
 
     def event_stream():
         full_response = ""
