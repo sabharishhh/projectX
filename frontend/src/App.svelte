@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
 
   const API_BASE = "http://127.0.0.1:8000";
+  const MEMORY_BASE = "http://127.0.0.1:8100";
   const CONVERSATION_ID = "default";
 
   let messages = $state([]);
@@ -54,6 +55,15 @@
     streaming = false;
   }
 
+  async function clearConversation() {
+    await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`, { method: "DELETE" });
+    messages = [];
+  }
+
+  async function clearMemory() {
+    await fetch(`${MEMORY_BASE}/reset`, { method: "POST" });
+  }
+
   function handleKeydown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -63,6 +73,11 @@
 </script>
 
 <main>
+  <div class="toolbar">
+    <button onclick={clearConversation}>Clear chat</button>
+    <button onclick={clearMemory}>Clear memory</button>
+  </div>
+
   <div class="messages">
     {#each messages as msg}
       <div class="msg {msg.role}">{msg.content}</div>
@@ -87,6 +102,16 @@
     height: 100vh;
     max-width: 700px;
     margin: 0 auto;
+  }
+  .toolbar {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid #ddd;
+  }
+  .toolbar button {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
   }
   .messages {
     flex: 1;

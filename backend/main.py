@@ -10,6 +10,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from providers import get_provider
 from memory import fetch_state, build_system_message
+from capture import capture
 
 load_dotenv()
 
@@ -77,20 +78,30 @@ async def chat(req: ChatRequest):
     history = load_messages(req.conversation_id)
     save_message(req.conversation_id, "user", req.message)
 
-    conversation = history + [{"role": "user", "content": req.message}]
-
-    system_msg = build_system_message(fetch_state())
-    if system_msg:
-        conversation = [system_msg] + conversation
+    known = fetch_state()
+    conversation = [build_system_message(known)] + history + [
+        {"role": "user", "content": req.message}
+    ]
 
     def event_stream():
         full_response = ""
-
         for chunk in provider.stream(conversation, model):
             full_response += chunk
             yield f"data: {json.dumps(chunk)}\n\n"
 
         save_message(req.conversation_id, "assistant", full_response)
+
+        # capture runs after the user already has their answer
+        capture(provider, req.message, full_response, known, req.conversation_id)
+
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+@app.delete("/api/messages/{conversation_id}")
+def clear_messages(conversation_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+    conn.commit()
+    conn.close()
+    return {"cleared": conversation_id}

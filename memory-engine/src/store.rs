@@ -149,6 +149,21 @@ impl MemoryStore {
         }
     }
 
+    /// Dev-only: wipes all objects and HEAD. Not part of the product surface —
+    /// hard-delete of individual units is a separate, deliberate operation.
+    pub fn reset(&self) -> Result<(), StoreError> {
+        if self.objects_dir.exists() {
+            fs::remove_dir_all(&self.objects_dir)?;
+        }
+        fs::create_dir_all(&self.objects_dir)?;
+
+        let head = self.root.join("HEAD");
+        if head.exists() {
+            fs::remove_file(head)?;
+        }
+        Ok(())
+    }
+
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {

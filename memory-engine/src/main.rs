@@ -8,6 +8,7 @@ use axum::{
 };
 use memory_engine::{Commit, MemoryStore, MemoryUnit, Provenance, UnitChange, UnitType};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::CorsLayer;
 
 struct AppState {
     store: MemoryStore,
@@ -93,6 +94,12 @@ async fn history(State(app): State<Arc<AppState>>) -> Result<Json<Vec<CommitView
     ))
 }
 
+/// Dev-only: wipes the entire store.
+async fn reset(State(app): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, ApiError> {
+    app.store.reset().map_err(internal)?;
+    Ok(Json(serde_json::json!({ "reset": true })))
+}
+
 #[tokio::main]
 async fn main() {
     let root = std::env::var("MEMORY_ROOT").unwrap_or_else(|_| "./memory-store".to_string());
@@ -104,7 +111,9 @@ async fn main() {
         .route("/state", get(state))
         .route("/remember", post(remember))
         .route("/history", get(history))
-        .with_state(app_state);
+        .route("/reset", post(reset))
+        .with_state(app_state)
+        .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8100")
         .await
