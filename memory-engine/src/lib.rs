@@ -1,6 +1,8 @@
+pub mod commit;
 pub mod store;
 pub mod unit;
 
+pub use commit::{Commit, UnitChange};
 pub use store::{MemoryStore, StoreError};
 pub use unit::{MemoryUnit, Provenance, UnitType};
 
@@ -54,4 +56,45 @@ mod tests {
 
         assert_ne!(a, b);
     }
+
+    #[test]
+    fn commits_chain_into_history() {
+        let dir = tempdir().unwrap();
+        let store = MemoryStore::open(dir.path()).unwrap();
+
+        let first_unit = store.put(&sample()).unwrap();
+        let c1 = store.commit(&Commit::new(
+            None,
+            vec![UnitChange::Added { hash: first_unit.clone() }],
+            "conv-1",
+            "learned they prefer short, direct answers",
+        )).unwrap();
+
+        let mut revised = sample();
+        revised.content = "prefers long, detailed answers".into();
+        let second_unit = store.put(&revised).unwrap();
+
+        let c2 = store.commit(&Commit::new(
+            Some(c1.clone()),
+            vec![UnitChange::Modified { from: first_unit, to: second_unit }],
+            "conv-2",
+            "answer-length preference flipped from short to long",
+        )).unwrap();
+
+        assert_eq!(store.head().unwrap(), Some(c2.clone()));
+
+        let history = store.history(&c2).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].0, c2);
+        assert_eq!(history[1].0, c1);
+        assert!(history[1].1.parent.is_none());
+    }
+
+    #[test]
+    fn head_is_none_before_first_commit() {
+        let dir = tempdir().unwrap();
+        let store = MemoryStore::open(dir.path()).unwrap();
+        assert!(store.head().unwrap().is_none());
+    }
+    
 }

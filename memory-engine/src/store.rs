@@ -2,8 +2,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::commit::Commit;
 use crate::unit::MemoryUnit;
 
 #[derive(Debug)]
@@ -20,21 +22,82 @@ impl From<serde_json::Error> for StoreError {
 }
 
 pub struct MemoryStore {
+    root: PathBuf,
     objects_dir: PathBuf,
 }
 
 impl MemoryStore {
-    /// Creates <root>/objects/ if it doesn't exist.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let objects_dir = root.as_ref().join("objects");
+        let root = root.as_ref().to_path_buf();
+        let objects_dir = root.join("objects");
         fs::create_dir_all(&objects_dir)?;
-        Ok(Self { objects_dir })
+        Ok(Self { root, objects_dir })
     }
 
-    /// Writes the unit and returns its hash. Writing the same unit
-    /// twice is a no-op that returns the same hash.
+    // --- units ---
+
     pub fn put(&self, unit: &MemoryUnit) -> Result<String, StoreError> {
-        let json = serde_json::to_vec(unit)?;
+        self.put_object(unit)
+    }
+
+    pub fn get(&self, hash: &str) -> Result<MemoryUnit, StoreError> {
+        self.get_object(hash)
+    }
+
+    // --- commits ---
+
+    pub fn put_commit(&self, commit: &Commit) -> Result<String, StoreError> {
+        self.put_object(commit)
+    }
+
+    pub fn get_commit(&self, hash: &str) -> Result<Commit, StoreError> {
+        self.get_object(hash)
+    }
+
+    /// Walks parent pointers, newest first.
+    pub fn history(&self, from: &str) -> Result<Vec<(String, Commit)>, StoreError> {
+        let mut out = Vec::new();
+        let mut cursor = Some(from.to_string());
+
+        while let Some(hash) = cursor {
+            let commit = self.get_commit(&hash)?;
+            cursor = commit.parent.clone();
+            out.push((hash, commit));
+        }
+        Ok(out)
+    }
+
+    // --- HEAD ---
+
+    pub fn set_head(&self, hash: &str) -> Result<(), StoreError> {
+        fs::write(self.root.join("HEAD"), hash)?;
+        Ok(())
+    }
+
+    /// None if nothing has been committed yet.
+    pub fn head(&self) -> Result<Option<String>, StoreError> {
+        match fs::read_to_string(self.root.join("HEAD")) {
+            Ok(s) => Ok(Some(s.trim().to_string())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Convenience: write a commit and move HEAD to it in one step.
+    pub fn commit(&self, commit: &Commit) -> Result<String, StoreError> {
+        let hash = self.put_commit(commit)?;
+        self.set_head(&hash)?;
+        Ok(hash)
+    }
+
+    pub fn has(&self, hash: &str) -> bool {
+        self.path_for(hash).exists()
+    }
+
+    // --- internals ---
+
+    fn put_object<T: Serialize>(&self, value: &T) -> Result<String, StoreError> {
+        let json = serde_json::to_vec(value)?;
         let hash = hash_bytes(&json);
         let path = self.path_for(&hash);
 
@@ -45,17 +108,11 @@ impl MemoryStore {
         Ok(hash)
     }
 
-    pub fn get(&self, hash: &str) -> Result<MemoryUnit, StoreError> {
+    fn get_object<T: DeserializeOwned>(&self, hash: &str) -> Result<T, StoreError> {
         let bytes = fs::read(self.path_for(hash))?;
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    pub fn has(&self, hash: &str) -> bool {
-        self.path_for(hash).exists()
-    }
-
-    /// Fans out by the first two hex chars, like git, so no single
-    /// directory ends up with thousands of files.
     fn path_for(&self, hash: &str) -> PathBuf {
         self.objects_dir.join(&hash[..2]).join(&hash[2..])
     }
