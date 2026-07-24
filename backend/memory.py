@@ -19,6 +19,19 @@ def fetch_state() -> list[dict]:
     except Exception:
         return []
 
+def fetch_relevant(query: str, max_units: int = 12) -> list[dict]:
+    """Scored, budgeted subset for conversation injection.
+    Falls back to [] on failure — chat keeps working without memory."""
+    try:
+        r = httpx.post(
+            f"{MEMORY_URL}/retrieve",
+            json={"query": query, "max_units": max_units},
+            timeout=2.0,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
 
 def build_system_message(units: list[dict]) -> dict:
     parts = [IDENTITY]

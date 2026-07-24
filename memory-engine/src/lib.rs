@@ -1,6 +1,7 @@
 pub mod commit;
 pub mod store;
 pub mod unit;
+pub mod retrieval;
 
 pub use commit::{Commit, UnitChange};
 pub use store::{MemoryStore, StoreError};

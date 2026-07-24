@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from providers import get_provider
-from memory import fetch_state, build_system_message
+from memory import fetch_state, fetch_relevant, build_system_message
 from capture import extract_units, commit_unit, supersede_unit
 import ledger
 
@@ -117,10 +117,15 @@ async def chat(req: ChatRequest):
     history = load_messages(req.conversation_id)
     save_message(req.conversation_id, "user", req.message)
 
-    known = fetch_state()
-    conversation = [build_system_message(known)] + to_provider_messages(history) + [
+    # --- CHANGE 1 LANDS HERE ---
+    known = fetch_state()  # full state — capture/dedup needs everything
+    injected = fetch_relevant(req.message, max_units=12)  # scored subset — what the model actually sees
+    
+    # Notice we pass `injected` to the system message, not `known`
+    conversation = [build_system_message(injected)] + to_provider_messages(history) + [
         {"role": "user", "content": req.message}
     ]
+    # ---------------------------
 
     ledger.log("provider_call", f"model={model}", req.conversation_id, actor="user")
 
@@ -130,14 +135,17 @@ async def chat(req: ChatRequest):
     def event_stream():
         activity_log = []
 
-        if known:
+        # --- CHANGE 2 LANDS HERE ---
+        # The UI should only show what was actually injected into the context window
+        if injected:
             ev = {
                 "kind": "memory_read",
-                "label": f"Recalled {len(known)} {'fact' if len(known) == 1 else 'facts'}",
-                "units": known,
+                "label": f"Recalled {len(injected)} {'fact' if len(injected) == 1 else 'facts'}",
+                "units": injected,
             }
             activity_log.append(ev)
             yield sse({"type": "activity", "event": ev})
+        # ---------------------------
 
         full_response = ""
         try:
@@ -148,6 +156,7 @@ async def chat(req: ChatRequest):
             yield sse({"type": "error", "message": str(e)})
             return
 
+        # 'known' (the full database) is still used here for deduplication/conflict checks
         units = extract_units(provider, req.message, full_response, known)
         added, conflicts = [], []
 

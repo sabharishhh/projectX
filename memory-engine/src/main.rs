@@ -56,7 +56,18 @@ struct ForgetRequest {
     summary: String,
 }
 
+#[derive(Deserialize)]
+struct RetrieveRequest {
+    query: String,
+    #[serde(default = "default_max_units")]
+    max_units: usize,
+}
+
 type ApiError = (StatusCode, String);
+
+fn default_max_units() -> usize {
+    12
+}
 
 fn internal(e: impl std::fmt::Debug) -> ApiError {
     (StatusCode::INTERNAL_SERVER_ERROR, format!("{:?}", e))
@@ -154,6 +165,36 @@ async fn history(State(app): State<Arc<AppState>>) -> Result<Json<Vec<CommitView
     ))
 }
 
+/// Scored, budgeted retrieval for injecting into a conversation.
+/// Identity and preference units are always included, unscored — they're
+/// cheap and broadly useful, per the spec's "pinned set" rule.
+async fn retrieve(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<RetrieveRequest>,
+) -> Result<Json<Vec<UnitView>>, ApiError> {
+    let units = app.store.current_state().map_err(internal)?;
+
+    let (pinned, rest): (Vec<_>, Vec<_>) = units.into_iter().partition(|(_, u)| {
+        matches!(u.unit_type, UnitType::Identity | UnitType::Preference)
+    });
+
+    let mut out: Vec<UnitView> = pinned
+        .into_iter()
+        .map(|(hash, unit)| UnitView { hash, unit })
+        .collect();
+
+    let scored = memory_engine::retrieval::score(&req.query, &rest);
+    let remaining = req.max_units.saturating_sub(out.len());
+    out.extend(
+        scored
+            .into_iter()
+            .take(remaining)
+            .map(|s| UnitView { hash: s.hash, unit: s.unit }),
+    );
+
+    Ok(Json(out))
+}
+
 /// Dev-only: wipes the entire store.
 async fn reset(State(app): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, ApiError> {
     app.store.reset().map_err(internal)?;
@@ -174,6 +215,7 @@ async fn main() {
         .route("/reset", post(reset))
         .route("/supersede", post(supersede))
         .route("/forget", post(forget))
+        .route("/retrieve", post(retrieve))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 
