@@ -1,12 +1,531 @@
-   0.036564208s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint: stale: changed "/Users/sabharishhh/Developer/projectX/memory-engine/src/lib.rs"
-   0.036585750s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint:           (vs) "/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/memory-engine-2c0dc92305799cca/dep-lib-memory_engine"
-   0.036590208s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1784906159, nanos: 256367469 } < FileTime { seconds: 1784906190, nanos: 353654536 }
-   0.036693125s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint: fingerprint dirty for memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("memory_engine", ["lib"], "/Users/sabharishhh/Developer/projectX/memory-engine/src/lib.rs", Edition2024) }
-   0.036711583s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/memory-engine-2c0dc92305799cca/dep-lib-memory_engine", reference_mtime: FileTime { seconds: 1784906159, nanos: 256367469 }, stale: "/Users/sabharishhh/Developer/projectX/memory-engine/src/lib.rs", stale_mtime: FileTime { seconds: 1784906190, nanos: 353654536 } }))
-   0.041157458s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint: stale: changed "/Users/sabharishhh/Developer/projectX/memory-engine/src/lib.rs"
-   0.041166292s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint:           (vs) "/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/memory-engine-af35d3a9c290f746/dep-test-lib-memory_engine"
-   0.041169583s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1784906159, nanos: 256391969 } < FileTime { seconds: 1784906190, nanos: 353654536 }
-   0.041257167s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint: fingerprint dirty for memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("memory_engine", ["lib"], "/Users/sabharishhh/Developer/projectX/memory-engine/src/lib.rs", Edition2024) }
-   0.041268375s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/memory-engine-af35d3a9c290f746/dep-test-lib-memory_engine", reference_mtime: FileTime { seconds: 1784906159, nanos: 256391969 }, stale: "/Users/sabharishhh/Developer/projectX/memory-engine/src/lib.rs", stale_mtime: FileTime { seconds: 1784906190, nanos: 353654536 } }))
+    Blocking waiting for file lock on build directory
+   6.369045333s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint: fingerprint error for memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("memory_engine", ["lib"], "/Users/sabharishhh/Developer/projectX/memory-engine/src/lib.rs", Edition2024) }
+   6.369082500s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/memory-engine-887ab72d7293df43/lib-memory_engine`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+   6.373925833s  INFO prepare_target{force=false package_id=axum v0.8.9 target="axum"}: cargo::core::compiler::fingerprint: fingerprint error for axum v0.8.9/Check { test: false }/TargetInner { ..: lib_target("axum", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/lib.rs", Edition2021) }
+   6.373938292s  INFO prepare_target{force=false package_id=axum v0.8.9 target="axum"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/axum-358991cd2801f2b5/lib-axum`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   6.374882542s  INFO prepare_target{force=false package_id=axum-core v0.5.6 target="axum_core"}: cargo::core::compiler::fingerprint: fingerprint error for axum-core v0.5.6/Check { test: false }/TargetInner { ..: lib_target("axum_core", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-core-0.5.6/src/lib.rs", Edition2021) }
+   6.374890458s  INFO prepare_target{force=false package_id=axum-core v0.5.6 target="axum_core"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/axum-core-1ffedfd99c13f6b8/lib-axum_core`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.375707042s  INFO prepare_target{force=false package_id=http-body-util v0.1.4 target="http_body_util"}: cargo::core::compiler::fingerprint: fingerprint error for http-body-util v0.1.4/Check { test: false }/TargetInner { ..: lib_target("http_body_util", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/http-body-util-0.1.4/src/lib.rs", Edition2018) }
+   6.375714167s  INFO prepare_target{force=false package_id=http-body-util v0.1.4 target="http_body_util"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/http-body-util-5eead9dbebba3f8c/lib-http_body_util`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   6.376726917s  INFO prepare_target{force=false package_id=futures-util v0.3.33 target="futures_util"}: cargo::core::compiler::fingerprint: fingerprint error for futures-util v0.3.33/Check { test: false }/TargetInner { ..: lib_target("futures_util", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-util-0.3.33/src/lib.rs", Edition2018) }
+   6.376733208s  INFO prepare_target{force=false package_id=futures-util v0.3.33 target="futures_util"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/futures-util-59ea806a8c3aacc8/lib-futures_util`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.377245083s  INFO prepare_target{force=false package_id=hyper v1.11.0 target="hyper"}: cargo::core::compiler::fingerprint: fingerprint error for hyper v1.11.0/Check { test: false }/TargetInner { ..: lib_target("hyper", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-1.11.0/src/lib.rs", Edition2021) }
+   6.377254625s  INFO prepare_target{force=false package_id=hyper v1.11.0 target="hyper"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/hyper-2c1036e2413340d7/lib-hyper`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.378392833s  INFO prepare_target{force=false package_id=tokio v1.53.1 target="tokio"}: cargo::core::compiler::fingerprint: fingerprint error for tokio v1.53.1/Check { test: false }/TargetInner { ..: lib_target("tokio", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/lib.rs", Edition2021) }
+   6.378399667s  INFO prepare_target{force=false package_id=tokio v1.53.1 target="tokio"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/tokio-1162119f4dc49959/lib-tokio`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   6.380535542s  INFO prepare_target{force=false package_id=hyper-util v0.1.20 target="hyper_util"}: cargo::core::compiler::fingerprint: fingerprint error for hyper-util v0.1.20/Check { test: false }/TargetInner { ..: lib_target("hyper_util", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hyper-util-0.1.20/src/lib.rs", Edition2021) }
+   6.380542833s  INFO prepare_target{force=false package_id=hyper-util v0.1.20 target="hyper_util"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/hyper-util-bd060cd3e71ce7a0/lib-hyper_util`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.381053625s  INFO prepare_target{force=false package_id=serde_core v1.0.229 target="serde_core"}: cargo::core::compiler::fingerprint: fingerprint error for serde_core v1.0.229/Check { test: false }/TargetInner { ..: lib_target("serde_core", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/lib.rs", Edition2021) }
+   6.381059458s  INFO prepare_target{force=false package_id=serde_core v1.0.229 target="serde_core"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/serde_core-f0916359f5546285/lib-serde_core`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.381393792s  INFO prepare_target{force=false package_id=serde_json v1.0.151 target="serde_json"}: cargo::core::compiler::fingerprint: fingerprint error for serde_json v1.0.151/Check { test: false }/TargetInner { ..: lib_target("serde_json", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/lib.rs", Edition2021) }
+   6.381399083s  INFO prepare_target{force=false package_id=serde_json v1.0.151 target="serde_json"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/serde_json-d0b086183e4fb3ff/lib-serde_json`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.382076333s  INFO prepare_target{force=false package_id=serde_path_to_error v0.1.20 target="serde_path_to_error"}: cargo::core::compiler::fingerprint: fingerprint error for serde_path_to_error v0.1.20/Check { test: false }/TargetInner { ..: lib_target("serde_path_to_error", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_path_to_error-0.1.20/src/lib.rs", Edition2021) }
+   6.382082250s  INFO prepare_target{force=false package_id=serde_path_to_error v0.1.20 target="serde_path_to_error"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/serde_path_to_error-e182bcedafcc0888/lib-serde_path_to_error`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.382292875s  INFO prepare_target{force=false package_id=serde_urlencoded v0.7.1 target="serde_urlencoded"}: cargo::core::compiler::fingerprint: fingerprint error for serde_urlencoded v0.7.1/Check { test: false }/TargetInner { name_inferred: true, tested: false, ..: lib_target("serde_urlencoded", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_urlencoded-0.7.1/src/lib.rs", Edition2018) }
+   6.382306500s  INFO prepare_target{force=false package_id=serde_urlencoded v0.7.1 target="serde_urlencoded"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/serde_urlencoded-b0a52c0aaaf6e1fc/lib-serde_urlencoded`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.382764000s  INFO prepare_target{force=false package_id=serde v1.0.229 target="serde"}: cargo::core::compiler::fingerprint: fingerprint error for serde v1.0.229/Check { test: false }/TargetInner { ..: lib_target("serde", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs", Edition2021) }
+   6.382772208s  INFO prepare_target{force=false package_id=serde v1.0.229 target="serde"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/serde-a5c31dacdd6680f0/lib-serde`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   6.383390750s  INFO prepare_target{force=false package_id=tower v0.5.3 target="tower"}: cargo::core::compiler::fingerprint: fingerprint error for tower v0.5.3/Check { test: false }/TargetInner { ..: lib_target("tower", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tower-0.5.3/src/lib.rs", Edition2018) }
+   6.383400042s  INFO prepare_target{force=false package_id=tower v0.5.3 target="tower"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/tower-67d1f458afefcaea/lib-tower`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.383829167s  INFO prepare_target{force=false package_id=chrono v0.4.45 target="chrono"}: cargo::core::compiler::fingerprint: fingerprint error for chrono v0.4.45/Check { test: false }/TargetInner { ..: lib_target("chrono", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/chrono-0.4.45/src/lib.rs", Edition2021) }
+   6.383835042s  INFO prepare_target{force=false package_id=chrono v0.4.45 target="chrono"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/chrono-e5fdcf0066fd2595/lib-chrono`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   6.385449375s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint: fingerprint error for memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("memory_engine", ["lib"], "/Users/sabharishhh/Developer/projectX/memory-engine/src/lib.rs", Edition2024) }
+   6.385456750s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory_engine"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/memory-engine-24339d9ff2251329/test-lib-memory_engine`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+   6.385883792s  INFO prepare_target{force=false package_id=tempfile v3.27.0 target="tempfile"}: cargo::core::compiler::fingerprint: fingerprint error for tempfile v3.27.0/Check { test: false }/TargetInner { ..: lib_target("tempfile", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tempfile-3.27.0/src/lib.rs", Edition2021) }
+   6.385890125s  INFO prepare_target{force=false package_id=tempfile v3.27.0 target="tempfile"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/tempfile-0780cc769437f5e1/lib-tempfile`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   6.386446417s  INFO prepare_target{force=false package_id=rustix v1.1.4 target="rustix"}: cargo::core::compiler::fingerprint: fingerprint error for rustix v1.1.4/Check { test: false }/TargetInner { ..: lib_target("rustix", ["lib"], "/Users/sabharishhh/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-1.1.4/src/lib.rs", Edition2021) }
+   6.386452250s  INFO prepare_target{force=false package_id=rustix v1.1.4 target="rustix"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/rustix-729cacfddd1c21e1/lib-rustix`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   6.387009125s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory-engine"}: cargo::core::compiler::fingerprint: fingerprint error for memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine)/Check { test: false }/TargetInner { name: "memory-engine", doc: true, ..: with_path("/Users/sabharishhh/Developer/projectX/memory-engine/src/main.rs", Edition2024) }
+   6.387015583s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory-engine"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/memory-engine-b59bcb4618d42de4/bin-memory-engine`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+   6.387465208s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory-engine"}: cargo::core::compiler::fingerprint: fingerprint error for memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine)/Check { test: true }/TargetInner { name: "memory-engine", doc: true, ..: with_path("/Users/sabharishhh/Developer/projectX/memory-engine/src/main.rs", Edition2024) }
+   6.387470750s  INFO prepare_target{force=false package_id=memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine) target="memory-engine"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/sabharishhh/Developer/projectX/memory-engine/target/debug/.fingerprint/memory-engine-55210e962f671447/test-bin-memory-engine`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+    Checking serde_core v1.0.229
+    Checking tokio v1.53.1
+    Checking futures-util v0.3.33
+    Checking http-body-util v0.1.4
+    Checking rustix v1.1.4
+    Checking axum-core v0.5.6
+    Checking tempfile v3.27.0
+    Checking serde v1.0.229
+    Checking serde_json v1.0.151
+    Checking serde_path_to_error v0.1.20
+    Checking serde_urlencoded v0.7.1
+    Checking chrono v0.4.45
+    Checking hyper v1.11.0
+    Checking tower v0.5.3
+    Checking hyper-util v0.1.20
+    Checking axum v0.8.9
     Checking memory-engine v0.1.0 (/Users/sabharishhh/Developer/projectX/memory-engine)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.76s
