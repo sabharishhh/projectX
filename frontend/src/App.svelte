@@ -31,13 +31,14 @@
   }
 
   async function resolve(act, choice) {
-    await fetch(`${API_BASE}/api/memory/resolve`, {
+    const res = await fetch(`${API_BASE}/api/memory/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ conflict_id: act.id, choice }),
     });
-    act.resolved = choice;
-    await loadMemory();
+    const data = await res.json();
+    act.resolved = data.ok ? choice : "expired";
+    if (data.ok) await loadMemory();
   }
 
   // keep the latest message in view as tokens arrive
@@ -186,7 +187,9 @@
                           ? "Updated."
                           : act.resolved === "keep_both"
                             ? "Keeping both."
-                            : "Kept the original."}
+                            : act.resolved === "expired"
+                              ? "This decision expired (server restarted since) — check current memory."
+                              : "Kept the original."}
                       </p>
                     {:else}
                       <div class="choices">

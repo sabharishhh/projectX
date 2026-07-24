@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from providers import get_provider
 from memory import fetch_state, build_system_message
 from capture import extract_units, commit_unit, supersede_unit
+import ledger
 
 load_dotenv()
 
@@ -39,30 +40,48 @@ def init_db():
             conversation_id TEXT NOT NULL,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
+            activity TEXT,
             created_at TEXT NOT NULL
         )
     """)
+    # migration for dbs created before the activity column existed
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
+    if "activity" not in cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN activity TEXT")
     conn.commit()
     conn.close()
 
 init_db()
+ledger.init_ledger()
 
 
 def load_messages(conversation_id: str):
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+        "SELECT role, content, activity FROM messages WHERE conversation_id = ? ORDER BY id ASC",
         (conversation_id,),
     ).fetchall()
     conn.close()
-    return [{"role": r, "content": c} for r, c in rows]
+    out = []
+    for role, content, activity in rows:
+        msg = {"role": role, "content": content}
+        if activity:
+            msg["activity"] = json.loads(activity)
+        out.append(msg)
+    return out
 
 
-def save_message(conversation_id: str, role: str, content: str):
+def to_provider_messages(msgs):
+    """Strip UI-only fields (activity) before sending to the model."""
+    return [{"role": m["role"], "content": m["content"]} for m in msgs]
+
+
+def save_message(conversation_id: str, role: str, content: str, activity: list | None = None):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-        (conversation_id, role, content, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO messages (conversation_id, role, content, activity, created_at) VALUES (?, ?, ?, ?, ?)",
+        (conversation_id, role, content, json.dumps(activity) if activity else None,
+         datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
     conn.close()
@@ -88,30 +107,37 @@ def get_messages(conversation_id: str):
     return load_messages(conversation_id)
 
 
+@app.get("/api/ledger")
+def get_ledger(limit: int = 50):
+    return ledger.recent(limit)
+
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     history = load_messages(req.conversation_id)
     save_message(req.conversation_id, "user", req.message)
 
     known = fetch_state()
-    conversation = [build_system_message(known)] + history + [
+    conversation = [build_system_message(known)] + to_provider_messages(history) + [
         {"role": "user", "content": req.message}
     ]
+
+    ledger.log("provider_call", f"model={model}", req.conversation_id, actor="user")
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps(payload)}\n\n"
 
     def event_stream():
-        # what memory contributed to this turn — emitted before the answer
+        activity_log = []
+
         if known:
-            yield sse({
-                "type": "activity",
-                "event": {
-                    "kind": "memory_read",
-                    "label": f"Recalled {len(known)} {'fact' if len(known) == 1 else 'facts'}",
-                    "units": known,
-                },
-            })
+            ev = {
+                "kind": "memory_read",
+                "label": f"Recalled {len(known)} {'fact' if len(known) == 1 else 'facts'}",
+                "units": known,
+            }
+            activity_log.append(ev)
+            yield sse({"type": "activity", "event": ev})
 
         full_response = ""
         try:
@@ -121,8 +147,6 @@ async def chat(req: ChatRequest):
         except Exception as e:
             yield sse({"type": "error", "message": str(e)})
             return
-
-        save_message(req.conversation_id, "assistant", full_response)
 
         units = extract_units(provider, req.message, full_response, known)
         added, conflicts = [], []
@@ -135,37 +159,36 @@ async def chat(req: ChatRequest):
             )
             if target:
                 cid = uuid4().hex[:12]
-                PENDING[cid] = {
-                    "from": target["hash"],
-                    "unit": u,
-                    "source": req.conversation_id,
-                }
+                PENDING[cid] = {"from": target["hash"], "unit": u, "source": req.conversation_id}
                 conflicts.append({"id": cid, "old": target, "new": u})
+                ledger.log("conflict_raised",
+                           f"'{u['content']}' conflicts with '{target['content']}'",
+                           req.conversation_id, actor="system")
             elif commit_unit(u, req.conversation_id):
                 added.append(u)
+                ledger.log("memory_commit", f"added: {u['content']}", req.conversation_id, actor="system")
 
         if added:
-            yield sse({
-                "type": "activity",
-                "event": {
-                    "kind": "memory_write",
-                    "label": f"Remembered {len(added)} {'thing' if len(added) == 1 else 'things'}",
-                    "units": added,
-                },
-            })
+            ev = {
+                "kind": "memory_write",
+                "label": f"Remembered {len(added)} {'thing' if len(added) == 1 else 'things'}",
+                "units": added,
+            }
+            activity_log.append(ev)
+            yield sse({"type": "activity", "event": ev})
 
         for c in conflicts:
-            yield sse({
-                "type": "activity",
-                "event": {
-                    "kind": "conflict",
-                    "label": "This changes something I already knew",
-                    "id": c["id"],
-                    "old": c["old"],
-                    "new": c["new"],
-                },
-            })
+            ev = {
+                "kind": "conflict",
+                "label": "This changes something I already knew",
+                "id": c["id"],
+                "old": c["old"],
+                "new": c["new"],
+            }
+            activity_log.append(ev)
+            yield sse({"type": "activity", "event": ev})
 
+        save_message(req.conversation_id, "assistant", full_response, activity_log)
         yield sse({"type": "done"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -175,13 +198,16 @@ async def chat(req: ChatRequest):
 def resolve_conflict(req: ResolveRequest):
     p = PENDING.pop(req.conflict_id, None)
     if not p:
-        return {"ok": False, "reason": "already resolved"}
+        return {"ok": False, "reason": "already resolved or expired"}
 
     if req.choice == "update":
         supersede_unit(p["from"], p["unit"], p["source"])
+        ledger.log("conflict_resolved", f"replaced with: {p['unit']['content']}", p["source"], actor="user")
     elif req.choice == "keep_both":
         commit_unit(p["unit"], p["source"])
-    # keep_old: nothing is written
+        ledger.log("conflict_resolved", f"kept both: {p['unit']['content']}", p["source"], actor="user")
+    else:
+        ledger.log("conflict_resolved", "kept the original, ignored the new fact", p["source"], actor="user")
 
     return {"ok": True}
 
@@ -192,4 +218,5 @@ def clear_messages(conversation_id: str):
     conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
     conn.commit()
     conn.close()
+    ledger.log("conversation_cleared", "chat history wiped", conversation_id, actor="user")
     return {"cleared": conversation_id}
