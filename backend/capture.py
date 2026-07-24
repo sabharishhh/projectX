@@ -27,16 +27,22 @@ between the lines, mark it "inferred".
 Known facts already stored:
 {known}
 
-Return JSON only, no other text:
-{{"units": [{{"content": "...", "unit_type": "preference", "provenance": "stated", "summary": "short plain-language note on what changed"}}]}}
+If a new fact DIRECTLY CONTRADICTS one of the known facts above — same subject,
+different value — add "supersedes": "<the 8-char id in brackets>" to that unit.
+Only for real contradictions, where both cannot be true at once. Do NOT use it
+for facts that merely relate to, extend, or sit alongside an existing one.
 
+Return JSON only, no other text:
+{{"units": [{{"content": "...", "unit_type": "preference", "provenance": "stated", "summary": "short plain-language note on what changed", "supersedes": "a1b2c3d4"}}]}}
+
+Omit "supersedes" entirely when the fact is new rather than a replacement.
 Return {{"units": []}} if nothing is worth remembering."""
 
 
 def _known_facts_block(units: list[dict]) -> str:
     if not units:
         return "(none yet)"
-    return "\n".join(f"- {u['content']}" for u in units)
+    return "\n".join(f"- [{u['hash'][:8]}] {u['content']}" for u in units)
 
 
 def extract_units(provider, user_message: str, assistant_message: str,
@@ -84,3 +90,22 @@ def capture(provider, user_message: str, assistant_message: str,
     """Extract and store. Returns the units actually committed."""
     units = extract_units(provider, user_message, assistant_message, known)
     return [u for u in units if commit_unit(u, source)]
+
+def supersede_unit(from_hash: str, unit: dict, source: str) -> bool:
+    try:
+        r = httpx.post(
+            f"{MEMORY_URL}/supersede",
+            json={
+                "from": from_hash,
+                "content": unit["content"],
+                "unit_type": unit["unit_type"],
+                "provenance": unit["provenance"],
+                "source": source,
+                "summary": unit.get("summary", unit["content"]),
+            },
+            timeout=3.0,
+        )
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False

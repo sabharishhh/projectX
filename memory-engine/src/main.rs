@@ -38,6 +38,24 @@ struct CommitView {
     commit: Commit,
 }
 
+#[derive(Deserialize)]
+struct SupersedeRequest {
+    /// hash of the unit being replaced
+    from: String,
+    content: String,
+    unit_type: UnitType,
+    provenance: Provenance,
+    source: String,
+    summary: String,
+}
+
+#[derive(Deserialize)]
+struct ForgetRequest {
+    hash: String,
+    source: String,
+    summary: String,
+}
+
 type ApiError = (StatusCode, String);
 
 fn internal(e: impl std::fmt::Debug) -> ApiError {
@@ -80,6 +98,48 @@ async fn remember(
     Ok(Json(UnitView { hash, unit }))
 }
 
+/// Replace a unit with a new version. The old one stays in history.
+async fn supersede(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<SupersedeRequest>,
+) -> Result<Json<UnitView>, ApiError> {
+    let unit = MemoryUnit::new(req.content, req.unit_type, req.provenance, req.source.clone());
+    let hash = app.store.put(&unit).map_err(internal)?;
+
+    let parent = app.store.head().map_err(internal)?;
+    app.store
+        .commit(&Commit::new(
+            parent,
+            vec![UnitChange::Modified {
+                from: req.from,
+                to: hash.clone(),
+            }],
+            req.source,
+            req.summary,
+        ))
+        .map_err(internal)?;
+
+    Ok(Json(UnitView { hash, unit }))
+}
+
+/// Soft-forget: drops out of HEAD, stays readable in history.
+async fn forget(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<ForgetRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let parent = app.store.head().map_err(internal)?;
+    app.store
+        .commit(&Commit::new(
+            parent,
+            vec![UnitChange::Superseded { hash: req.hash }],
+            req.source,
+            req.summary,
+        ))
+        .map_err(internal)?;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 async fn history(State(app): State<Arc<AppState>>) -> Result<Json<Vec<CommitView>>, ApiError> {
     let head = match app.store.head().map_err(internal)? {
         Some(h) => h,
@@ -112,6 +172,8 @@ async fn main() {
         .route("/remember", post(remember))
         .route("/history", get(history))
         .route("/reset", post(reset))
+        .route("/supersede", post(supersede))
+        .route("/forget", post(forget))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 
