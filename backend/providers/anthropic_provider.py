@@ -1,0 +1,20 @@
+from typing import Iterator
+from anthropic import Anthropic
+from .base import Provider
+
+class AnthropicProvider(Provider):
+    def __init__(self, api_key: str):
+        self.client = Anthropic(api_key=api_key)
+
+    def stream(self, messages: list[dict], model: str) -> Iterator[str]:
+        system = "".join(m["content"] for m in messages if m["role"] == "system")
+        turns = [m for m in messages if m["role"] != "system"]
+
+        with self.client.messages.stream(
+            model=model,
+            max_tokens=4096,
+            system=system or None,
+            messages=turns,
+        ) as stream:
+            for text in stream.text_stream:
+                yield text

@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
+from providers import get_provider
 
 load_dotenv()
 
@@ -20,7 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+provider, model = get_provider()
 
 DB_PATH = "projectx.db"
 
@@ -79,17 +80,11 @@ async def chat(req: ChatRequest):
 
     def event_stream():
         full_response = ""
-        stream = client.responses.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
-            input=conversation,
-            stream=True,
-        )
-        for event in stream:
-            if event.type == "response.output_text.delta":
-                full_response += event.delta
-                yield f"data: {json.dumps(event.delta)}\n\n"
-            elif event.type == "response.completed":
-                break
+
+        for chunk in provider.stream(conversation, model):
+            full_response += chunk
+            yield f"data: {json.dumps(chunk)}\n\n"
+
         save_message(req.conversation_id, "assistant", full_response)
         yield "data: [DONE]\n\n"
 
