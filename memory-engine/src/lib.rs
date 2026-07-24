@@ -96,5 +96,61 @@ mod tests {
         let store = MemoryStore::open(dir.path()).unwrap();
         assert!(store.head().unwrap().is_none());
     }
-    
+
+    #[test]
+    fn state_reflects_modifications_not_stale_versions() {
+        let dir = tempdir().unwrap();
+        let store = MemoryStore::open(dir.path()).unwrap();
+
+        let old = store.put(&sample()).unwrap();
+        let c1 = store.commit(&Commit::new(
+            None,
+            vec![UnitChange::Added { hash: old.clone() }],
+            "conv-1",
+            "learned answer-length preference",
+        )).unwrap();
+
+        let mut revised = sample();
+        revised.content = "prefers long, detailed answers".into();
+        let new = store.put(&revised).unwrap();
+
+        store.commit(&Commit::new(
+            Some(c1),
+            vec![UnitChange::Modified { from: old, to: new.clone() }],
+            "conv-2",
+            "preference flipped to long answers",
+        )).unwrap();
+
+        let state = store.current_state().unwrap();
+        assert_eq!(state.len(), 1);
+        assert_eq!(state[0].0, new);
+        assert_eq!(state[0].1.content, "prefers long, detailed answers");
+    }
+
+    #[test]
+    fn superseded_units_drop_out_of_state_but_stay_readable() {
+        let dir = tempdir().unwrap();
+        let store = MemoryStore::open(dir.path()).unwrap();
+
+        let hash = store.put(&sample()).unwrap();
+        let c1 = store.commit(&Commit::new(
+            None,
+            vec![UnitChange::Added { hash: hash.clone() }],
+            "conv-1",
+            "learned a preference",
+        )).unwrap();
+
+        store.commit(&Commit::new(
+            Some(c1),
+            vec![UnitChange::Superseded { hash: hash.clone() }],
+            "conv-2",
+            "user asked to forget their answer-length preference",
+        )).unwrap();
+
+        assert!(store.current_state().unwrap().is_empty());
+        // soft-forget: gone from HEAD, still in the store
+        assert!(store.has(&hash));
+        assert_eq!(store.get(&hash).unwrap().content, sample().content);
+    }
+
 }

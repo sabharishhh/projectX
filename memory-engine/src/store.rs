@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::commit::Commit;
+use crate::commit::{Commit, UnitChange};
 use crate::unit::MemoryUnit;
 
 #[derive(Debug)]
@@ -116,6 +116,39 @@ impl MemoryStore {
     fn path_for(&self, hash: &str) -> PathBuf {
         self.objects_dir.join(&hash[..2]).join(&hash[2..])
     }
+
+    /// Replays history oldest-first to produce the units currently live at `commit_hash`.
+    /// Returns (hash, unit) pairs — superseded and replaced versions are excluded.
+    pub fn state_at(&self, commit_hash: &str) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
+        let mut live: Vec<String> = Vec::new();
+
+        // history() is newest-first; replay in the opposite order.
+        for (_, commit) in self.history(commit_hash)?.into_iter().rev() {
+            for change in commit.changes {
+                match change {
+                    UnitChange::Added { hash } => live.push(hash),
+                    UnitChange::Modified { from, to } => {
+                        live.retain(|h| h != &from);
+                        live.push(to);
+                    }
+                    UnitChange::Superseded { hash } => live.retain(|h| h != &hash),
+                }
+            }
+        }
+
+        live.into_iter()
+            .map(|h| self.get(&h).map(|u| (h, u)))
+            .collect()
+    }
+
+    /// Current state at HEAD. Empty if nothing is committed yet.
+    pub fn current_state(&self) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
+        match self.head()? {
+            Some(h) => self.state_at(&h),
+            None => Ok(Vec::new()),
+        }
+    }
+
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
