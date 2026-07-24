@@ -83,18 +83,44 @@ async def chat(req: ChatRequest):
         {"role": "user", "content": req.message}
     ]
 
+    def sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
     def event_stream():
+        # what memory contributed to this turn — emitted before the answer
+        if known:
+            yield sse({
+                "type": "activity",
+                "event": {
+                    "kind": "memory_read",
+                    "label": f"Recalled {len(known)} {'fact' if len(known) == 1 else 'facts'}",
+                    "units": known,
+                },
+            })
+
         full_response = ""
-        for chunk in provider.stream(conversation, model):
-            full_response += chunk
-            yield f"data: {json.dumps(chunk)}\n\n"
+        try:
+            for chunk in provider.stream(conversation, model):
+                full_response += chunk
+                yield sse({"type": "text", "value": chunk})
+        except Exception as e:
+            yield sse({"type": "error", "message": str(e)})
+            return
 
         save_message(req.conversation_id, "assistant", full_response)
 
-        # capture runs after the user already has their answer
-        capture(provider, req.message, full_response, known, req.conversation_id)
+        captured = capture(provider, req.message, full_response, known, req.conversation_id)
+        if captured:
+            yield sse({
+                "type": "activity",
+                "event": {
+                    "kind": "memory_write",
+                    "label": f"Remembered {len(captured)} {'thing' if len(captured) == 1 else 'things'}",
+                    "units": captured,
+                },
+            })
 
-        yield "data: [DONE]\n\n"
+        yield sse({"type": "done"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
