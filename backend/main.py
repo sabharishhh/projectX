@@ -81,7 +81,7 @@ async def chat(req: ChatRequest):
         full_response = ""
         stream = client.responses.create(
             model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
-            input=req.message,
+            input=conversation,
             stream=True,
         )
         for event in stream:

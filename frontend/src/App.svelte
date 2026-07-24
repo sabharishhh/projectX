@@ -21,9 +21,10 @@
     input = "";
     streaming = true;
 
-    // placeholder for the assistant's reply, filled in as tokens arrive
-    const assistantMsg = { role: "assistant", content: "" };
-    messages.push(assistantMsg);
+    // push placeholder, then hold its index — mutate via the array
+    // so Svelte's proxy sees the change
+    const assistantIndex = messages.length;
+    messages.push({ role: "assistant", content: "" });
 
     const response = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
@@ -41,14 +42,13 @@
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n\n");
-      buffer = lines.pop(); // keep any incomplete chunk for next read
+      buffer = lines.pop();
 
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
         const data = line.slice(6);
-        if (data === "[DONE]") { streaming = false; continue; }
-        assistantMsg.content += JSON.parse(data);
-        messages = messages; // trigger reactivity
+        if (data === "[DONE]") continue;
+        messages[assistantIndex].content += JSON.parse(data);
       }
     }
     streaming = false;
