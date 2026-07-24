@@ -90,6 +90,7 @@ def save_message(conversation_id: str, role: str, content: str, activity: list |
 class ChatRequest(BaseModel):
     conversation_id: str
     message: str
+    branch: str = "main"
 
 
 class ResolveRequest(BaseModel):
@@ -118,8 +119,8 @@ async def chat(req: ChatRequest):
     save_message(req.conversation_id, "user", req.message)
 
     # --- CHANGE 1 LANDS HERE ---
-    known = fetch_state()  # full state — capture/dedup needs everything
-    injected = fetch_relevant(req.message, max_units=12)  # scored subset — what the model actually sees
+    known = fetch_state(req.branch)  # full state — capture/dedup needs everything
+    injected = fetch_relevant(req.message, branch=req.branch, max_units=12)  # scored subset — what the model actually sees
     
     # Notice we pass `injected` to the system message, not `known`
     conversation = [build_system_message(injected)] + to_provider_messages(history) + [
@@ -173,7 +174,7 @@ async def chat(req: ChatRequest):
                 ledger.log("conflict_raised",
                            f"'{u['content']}' conflicts with '{target['content']}'",
                            req.conversation_id, actor="system")
-            elif commit_unit(u, req.conversation_id):
+            elif commit_unit(u, req.conversation_id, req.branch):
                 added.append(u)
                 ledger.log("memory_commit", f"added: {u['content']}", req.conversation_id, actor="system")
 
@@ -210,10 +211,10 @@ def resolve_conflict(req: ResolveRequest):
         return {"ok": False, "reason": "already resolved or expired"}
 
     if req.choice == "update":
-        supersede_unit(p["from"], p["unit"], p["source"])
+        supersede_unit(p["from"], p["unit"], p["source"], p["branch"])
         ledger.log("conflict_resolved", f"replaced with: {p['unit']['content']}", p["source"], actor="user")
     elif req.choice == "keep_both":
-        commit_unit(p["unit"], p["source"])
+        commit_unit(p["unit"], p["source"], p["branch"])
         ledger.log("conflict_resolved", f"kept both: {p['unit']['content']}", p["source"], actor="user")
     else:
         ledger.log("conflict_resolved", "kept the original, ignored the new fact", p["source"], actor="user")

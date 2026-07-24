@@ -66,7 +66,7 @@ def extract_units(provider, user_message: str, assistant_message: str,
         return []
 
 
-def commit_unit(unit: dict, source: str) -> bool:
+def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
     try:
         r = httpx.post(
             f"{MEMORY_URL}/remember",
@@ -76,6 +76,7 @@ def commit_unit(unit: dict, source: str) -> bool:
                 "provenance": unit["provenance"],
                 "source": source,
                 "summary": unit.get("summary", unit["content"]),
+                "branch": branch,
             },
             timeout=3.0,
         )
@@ -91,7 +92,7 @@ def capture(provider, user_message: str, assistant_message: str,
     units = extract_units(provider, user_message, assistant_message, known)
     return [u for u in units if commit_unit(u, source)]
 
-def supersede_unit(from_hash: str, unit: dict, source: str) -> bool:
+def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main") -> bool:
     try:
         r = httpx.post(
             f"{MEMORY_URL}/supersede",
@@ -102,6 +103,7 @@ def supersede_unit(from_hash: str, unit: dict, source: str) -> bool:
                 "provenance": unit["provenance"],
                 "source": source,
                 "summary": unit.get("summary", unit["content"]),
+                "branch": branch,
             },
             timeout=3.0,
         )

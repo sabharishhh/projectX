@@ -1,5 +1,9 @@
 <script>
   import { onMount } from "svelte";
+  import ActivityStrip from "./lib/ActivityStrip.svelte";
+  import ConflictBlock from "./lib/ConflictBlock.svelte";
+  import MemoryPanel from "./lib/MemoryPanel.svelte";
+  import { renderMarkdown } from "./lib/markdown.js";
 
   const API_BASE = "http://127.0.0.1:8000";
   const MEMORY_BASE = "http://127.0.0.1:8100";
@@ -10,10 +14,12 @@
   let streaming = $state(false);
   let memory = $state([]);
   let panelOpen = $state(true);
+  let branch = $state("main");
+  let branches = $state(["main"]);
   let scroller;
 
   onMount(async () => {
-    await Promise.all([loadMessages(), loadMemory()]);
+    await Promise.all([loadMessages(), loadMemory(), loadBranches()]);
   });
 
   async function loadMessages() {
@@ -23,11 +29,28 @@
 
   async function loadMemory() {
     try {
-      const res = await fetch(`${MEMORY_BASE}/state`);
+      const res = await fetch(`${MEMORY_BASE}/state?branch=${encodeURIComponent(branch)}`);
       memory = await res.json();
     } catch {
       memory = [];
     }
+  }
+
+  async function loadBranches() {
+    try {
+      const res = await fetch(`${MEMORY_BASE}/branches`);
+      const list = await res.json();
+      branches = list.length ? list : ["main"];
+    } catch {
+      branches = ["main"];
+    }
+  }
+
+  function newBranch() {
+    const name = prompt("Branch name (letters, numbers, - and _ only):");
+    if (!name) return;
+    branch = name;
+    loadMemory();
   }
 
   async function resolve(act, choice) {
@@ -62,7 +85,7 @@
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversation_id: CONVERSATION_ID, message: userText }),
+        body: JSON.stringify({ conversation_id: CONVERSATION_ID, message: userText, branch }),
       });
 
       const reader = response.body.getReader();
@@ -95,6 +118,7 @@
       messages[i].error = e.message;
     }
     streaming = false;
+    await loadBranches(); // a new branch may have just been created
   }
 
   async function clearChat() {
@@ -104,7 +128,8 @@
 
   async function clearMemory() {
     await fetch(`${MEMORY_BASE}/reset`, { method: "POST" });
-    await loadMemory();
+    branch = "main";
+    await Promise.all([loadMemory(), loadBranches()]);
   }
 
   function handleKeydown(e) {
@@ -112,26 +137,6 @@
       e.preventDefault();
       sendMessage();
     }
-  }
-
-  // minimal markdown: fenced code, inline code, bold
-  function render(text) {
-    const esc = (s) =>
-      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-    const parts = text.split(/```(\w*)\n?([\s\S]*?)```/g);
-    let out = "";
-    for (let i = 0; i < parts.length; i++) {
-      if (i % 3 === 0) {
-        out += esc(parts[i])
-          .replace(/`([^`]+)`/g, "<code>$1</code>")
-          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-          .replace(/\n/g, "<br>");
-      } else if (i % 3 === 2) {
-        out += `<pre><code>${esc(parts[i])}</code></pre>`;
-      }
-    }
-    return out;
   }
 </script>
 
@@ -149,8 +154,12 @@
     <header>
       <h1>projectX</h1>
       <div class="actions">
+        <select bind:value={branch} onchange={loadMemory}>
+          {#each branches as b}<option value={b}>{b}</option>{/each}
+        </select>
+        <button onclick={newBranch}>+ branch</button>
         <button onclick={clearChat}>Clear chat</button>
-        <button onclick={clearMemory}>Clear memory</button>
+        <button onclick={clearMemory}>Clear memory (all branches)</button>
         <button class="toggle" onclick={() => (panelOpen = !panelOpen)}>
           {panelOpen ? "Hide memory" : "Show memory"}
         </button>
@@ -167,7 +176,7 @@
           <div class="turn user"><div class="said">{msg.content}</div></div>
         {:else}
           <div class="turn assistant">
-            <div class="prose">{@html render(msg.content)}</div>
+            <div class="prose">{@html renderMarkdown(msg.content)}</div>
 
             {#if msg.error}
               <div class="error"><span class="tag">error</span>{msg.error}</div>
@@ -175,48 +184,9 @@
 
             {#each msg.activity ?? [] as act}
               {#if act.kind === "conflict"}
-                <div class="activity conflict">
-                  <div class="act-head static">{act.label}</div>
-                  <div class="conflict-body">
-                    <p class="was"><span class="meta">stored</span>{act.old.content}</p>
-                    <p class="now"><span class="meta">just now</span>{act.new.content}</p>
-
-                    {#if act.resolved}
-                      <p class="resolved">
-                        {act.resolved === "update"
-                          ? "Updated."
-                          : act.resolved === "keep_both"
-                            ? "Keeping both."
-                            : act.resolved === "expired"
-                              ? "This decision expired (server restarted since) — check current memory."
-                              : "Kept the original."}
-                      </p>
-                    {:else}
-                      <div class="choices">
-                        <button onclick={() => resolve(act, "update")}>Replace it</button>
-                        <button onclick={() => resolve(act, "keep_both")}>Both are true</button>
-                        <button onclick={() => resolve(act, "keep_old")}>Ignore this</button>
-                      </div>
-                    {/if}
-                  </div>
-                </div>
+                <ConflictBlock {act} onResolve={(choice) => resolve(act, choice)} />
               {:else}
-                <div class="activity {act.kind}">
-                  <button class="act-head" onclick={() => (act.open = !act.open)}>
-                    <span class="chev">{act.open ? "−" : "+"}</span>
-                    {act.label}
-                  </button>
-                  {#if act.open}
-                    <ul class="act-body">
-                      {#each act.units as u}
-                        <li>
-                          <span class="meta">{u.unit_type} · {u.provenance}</span>
-                          {u.content}
-                        </li>
-                      {/each}
-                    </ul>
-                  {/if}
-                </div>
+                <ActivityStrip {act} />
               {/if}
             {/each}
           </div>
@@ -239,24 +209,9 @@
   </section>
 
   {#if panelOpen}
-    <aside class="panel">
-      <div class="panel-head">
-        <span class="meta">memory</span>
-        <span class="count">{memory.length}</span>
-      </div>
-
-      {#if memory.length === 0}
-        <p class="empty small">Nothing stored yet.</p>
-      {:else}
-        {#each memory as u}
-          <article class="card">
-            <span class="meta">{u.unit_type} · {u.provenance}</span>
-            <p>{u.content}</p>
-            <span class="hash">{u.hash.slice(0, 12)}</span>
-          </article>
-        {/each}
-      {/if}
-    </aside>
+    <div class="panel-wrap">
+      <MemoryPanel {memory} {branch} />
+    </div>
   {/if}
 </div>
 
@@ -293,6 +248,10 @@
     min-height: 0;
   }
 
+  .panel-wrap {
+    min-height: 0;
+  }
+
   header {
     display: flex;
     align-items: baseline;
@@ -309,7 +268,17 @@
   }
   .actions {
     display: flex;
+    align-items: center;
     gap: 0.4rem;
+  }
+  .actions select {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.68rem;
+    color: var(--ink-soft);
+    background: none;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 0.28rem 0.4rem;
   }
   .actions button {
     font-family: "JetBrains Mono", monospace;
@@ -370,48 +339,6 @@
     font-size: 0.82rem;
   }
 
-  .activity {
-    margin-top: 0.7rem;
-    border: 1px dashed var(--verdigris);
-    border-radius: 2px;
-    background: var(--wash);
-  }
-  .act-head {
-    width: 100%;
-    text-align: left;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0.4rem 0.6rem;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.7rem;
-    letter-spacing: 0.03em;
-    color: var(--verdigris);
-  }
-  .chev {
-    display: inline-block;
-    width: 0.9rem;
-  }
-  .act-body {
-    margin: 0;
-    padding: 0 0.6rem 0.5rem 1.5rem;
-    list-style: none;
-  }
-  .act-body li {
-    font-size: 0.85rem;
-    line-height: 1.5;
-    padding: 0.25rem 0;
-  }
-
-  .meta {
-    display: block;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--verdigris);
-  }
-
   .error {
     margin-top: 0.6rem;
     padding: 0.5rem 0.7rem;
@@ -432,10 +359,6 @@
     color: var(--ink-soft);
     font-size: 0.9rem;
     font-style: italic;
-  }
-  .empty.small {
-    font-size: 0.8rem;
-    padding: 0 1rem;
   }
 
   .composer {
@@ -479,97 +402,11 @@
     cursor: default;
   }
 
-  .panel {
-    border-left: 1px solid var(--rule);
-    overflow-y: auto;
-    padding: 0.9rem 1rem 2rem;
-    background: rgba(255, 255, 255, 0.35);
-  }
-  .panel-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding-bottom: 0.6rem;
-    border-bottom: 1px solid var(--rule);
-    margin-bottom: 0.9rem;
-  }
-  .count {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.7rem;
-    color: var(--ink-soft);
-  }
-  .card {
-    border-left: 2px solid var(--verdigris);
-    padding: 0.35rem 0 0.35rem 0.6rem;
-    margin-bottom: 1rem;
-  }
-  .card p {
-    margin: 0.25rem 0 0.3rem;
-    font-size: 0.85rem;
-    line-height: 1.45;
-  }
-  .hash {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.6rem;
-    color: #9aa39a;
-  }
-  .activity.conflict {
-    border-style: solid;
-    border-color: #b07d2b;
-    background: #f6efe0;
-  }
-  .act-head.static {
-    padding: 0.4rem 0.6rem;
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.7rem;
-    letter-spacing: 0.03em;
-    color: #8a5f1c;
-  }
-  .conflict-body {
-    padding: 0 0.7rem 0.6rem;
-  }
-  .conflict-body p {
-    margin: 0.3rem 0;
-    font-size: 0.86rem;
-    line-height: 1.45;
-  }
-  .conflict-body .meta {
-    color: #8a5f1c;
-  }
-  .was {
-    opacity: 0.65;
-  }
-  .choices {
-    display: flex;
-    gap: 0.4rem;
-    margin-top: 0.6rem;
-  }
-  .choices button {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.68rem;
-    padding: 0.3rem 0.6rem;
-    border: 1px solid #b07d2b;
-    border-radius: 2px;
-    background: none;
-    color: #8a5f1c;
-    cursor: pointer;
-  }
-  .choices button:hover {
-    background: #b07d2b;
-    color: #f6efe0;
-  }
-  .resolved {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.68rem;
-    color: #8a5f1c;
-    margin-top: 0.5rem;
-  }
-
   @media (max-width: 820px) {
     .app {
       grid-template-columns: 1fr;
     }
-    .panel {
+    .panel-wrap {
       display: none;
     }
   }

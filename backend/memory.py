@@ -13,19 +13,19 @@ def fetch_state() -> list[dict]:
     """Current memory units. Returns [] if the engine is unreachable —
     chat should still work without memory."""
     try:
-        r = httpx.get(f"{MEMORY_URL}/state", timeout=2.0)
+        r = httpx.get(f"{MEMORY_URL}/state", params={"branch": branch}, timeout=2.0)
         r.raise_for_status()
         return r.json()
     except Exception:
         return []
 
-def fetch_relevant(query: str, max_units: int = 12) -> list[dict]:
+def fetch_relevant(query: str, branch: str = "main", max_units: int = 12) -> list[dict]:
     """Scored, budgeted subset for conversation injection.
     Falls back to [] on failure — chat keeps working without memory."""
     try:
         r = httpx.post(
             f"{MEMORY_URL}/retrieve",
-            json={"query": query, "max_units": max_units},
+            json={"query": query, "max_units": max_units, "branch": branch},
             timeout=2.0,
         )
         r.raise_for_status()

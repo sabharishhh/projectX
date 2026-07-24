@@ -21,6 +21,15 @@ impl From<serde_json::Error> for StoreError {
     fn from(e: serde_json::Error) -> Self { StoreError::Serde(e) }
 }
 
+/// Branch names become filenames under refs/, so they're restricted to
+/// something path-safe — this also blocks path traversal via a crafted
+/// branch name like "../../etc/passwd".
+pub fn valid_branch_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 pub struct MemoryStore {
     root: PathBuf,
     objects_dir: PathBuf,
@@ -54,11 +63,9 @@ impl MemoryStore {
         self.get_object(hash)
     }
 
-    /// Walks parent pointers, newest first.
     pub fn history(&self, from: &str) -> Result<Vec<(String, Commit)>, StoreError> {
         let mut out = Vec::new();
         let mut cursor = Some(from.to_string());
-
         while let Some(hash) = cursor {
             let commit = self.get_commit(&hash)?;
             cursor = commit.parent.clone();
@@ -67,31 +74,97 @@ impl MemoryStore {
         Ok(out)
     }
 
-    // --- HEAD ---
+    // --- refs (one HEAD pointer per branch) ---
 
-    pub fn set_head(&self, hash: &str) -> Result<(), StoreError> {
-        fs::write(self.root.join("HEAD"), hash)?;
-        Ok(())
+    fn ref_path(&self, branch: &str) -> PathBuf {
+        self.root.join("refs").join(branch)
     }
 
-    /// None if nothing has been committed yet.
-    pub fn head(&self) -> Result<Option<String>, StoreError> {
-        match fs::read_to_string(self.root.join("HEAD")) {
+    pub fn head(&self, branch: &str) -> Result<Option<String>, StoreError> {
+        match fs::read_to_string(self.ref_path(branch)) {
             Ok(s) => Ok(Some(s.trim().to_string())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
 
-    /// Convenience: write a commit and move HEAD to it in one step.
-    pub fn commit(&self, commit: &Commit) -> Result<String, StoreError> {
+    pub fn set_head(&self, branch: &str, hash: &str) -> Result<(), StoreError> {
+        let path = self.ref_path(branch);
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(path, hash)?;
+        Ok(())
+    }
+
+    /// Writes a commit and moves the given branch's HEAD to it.
+    pub fn commit(&self, branch: &str, commit: &Commit) -> Result<String, StoreError> {
         let hash = self.put_commit(commit)?;
-        self.set_head(&hash)?;
+        self.set_head(branch, &hash)?;
         Ok(hash)
+    }
+
+    /// Every branch that has at least one commit. A branch exists the
+    /// moment something is first committed to it — no separate creation step.
+    pub fn list_branches(&self) -> Result<Vec<String>, StoreError> {
+        let refs_dir = self.root.join("refs");
+        if !refs_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for entry in fs::read_dir(refs_dir)? {
+            if let Some(name) = entry?.file_name().to_str() {
+                out.push(name.to_string());
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 
     pub fn has(&self, hash: &str) -> bool {
         self.path_for(hash).exists()
+    }
+
+    // --- state resolution ---
+
+    /// Replays history oldest-first to produce the units live at `commit_hash`.
+    /// Branch-agnostic by design — it just walks parent pointers from
+    /// whatever commit it's given.
+    pub fn state_at(&self, commit_hash: &str) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
+        let mut live: Vec<String> = Vec::new();
+        for (_, commit) in self.history(commit_hash)?.into_iter().rev() {
+            for change in commit.changes {
+                match change {
+                    UnitChange::Added { hash } => live.push(hash),
+                    UnitChange::Modified { from, to } => {
+                        live.retain(|h| h != &from);
+                        live.push(to);
+                    }
+                    UnitChange::Superseded { hash } => live.retain(|h| h != &hash),
+                }
+            }
+        }
+        live.into_iter().map(|h| self.get(&h).map(|u| (h, u))).collect()
+    }
+
+    pub fn current_state(&self, branch: &str) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
+        match self.head(branch)? {
+            Some(h) => self.state_at(&h),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    // --- reset (dev only — wipes every branch, not just one) ---
+
+    pub fn reset(&self) -> Result<(), StoreError> {
+        if self.objects_dir.exists() {
+            fs::remove_dir_all(&self.objects_dir)?;
+        }
+        fs::create_dir_all(&self.objects_dir)?;
+
+        let refs_dir = self.root.join("refs");
+        if refs_dir.exists() {
+            fs::remove_dir_all(&refs_dir)?;
+        }
+        Ok(())
     }
 
     // --- internals ---
@@ -100,7 +173,6 @@ impl MemoryStore {
         let json = serde_json::to_vec(value)?;
         let hash = hash_bytes(&json);
         let path = self.path_for(&hash);
-
         if !path.exists() {
             fs::create_dir_all(path.parent().unwrap())?;
             fs::write(&path, &json)?;
@@ -116,62 +188,10 @@ impl MemoryStore {
     fn path_for(&self, hash: &str) -> PathBuf {
         self.objects_dir.join(&hash[..2]).join(&hash[2..])
     }
-
-    /// Replays history oldest-first to produce the units currently live at `commit_hash`.
-    /// Returns (hash, unit) pairs — superseded and replaced versions are excluded.
-    pub fn state_at(&self, commit_hash: &str) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
-        let mut live: Vec<String> = Vec::new();
-
-        // history() is newest-first; replay in the opposite order.
-        for (_, commit) in self.history(commit_hash)?.into_iter().rev() {
-            for change in commit.changes {
-                match change {
-                    UnitChange::Added { hash } => live.push(hash),
-                    UnitChange::Modified { from, to } => {
-                        live.retain(|h| h != &from);
-                        live.push(to);
-                    }
-                    UnitChange::Superseded { hash } => live.retain(|h| h != &hash),
-                }
-            }
-        }
-
-        live.into_iter()
-            .map(|h| self.get(&h).map(|u| (h, u)))
-            .collect()
-    }
-
-    /// Current state at HEAD. Empty if nothing is committed yet.
-    pub fn current_state(&self) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
-        match self.head()? {
-            Some(h) => self.state_at(&h),
-            None => Ok(Vec::new()),
-        }
-    }
-
-    /// Dev-only: wipes all objects and HEAD. Not part of the product surface —
-    /// hard-delete of individual units is a separate, deliberate operation.
-    pub fn reset(&self) -> Result<(), StoreError> {
-        if self.objects_dir.exists() {
-            fs::remove_dir_all(&self.objects_dir)?;
-        }
-        fs::create_dir_all(&self.objects_dir)?;
-
-        let head = self.root.join("HEAD");
-        if head.exists() {
-            fs::remove_file(head)?;
-        }
-        Ok(())
-    }
-
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
+    hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
