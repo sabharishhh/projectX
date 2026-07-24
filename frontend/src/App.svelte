@@ -1,7 +1,17 @@
 <script>
+  import { onMount } from "svelte";
+
+  const API_BASE = "http://127.0.0.1:8000";
+  const CONVERSATION_ID = "default";
+
   let messages = $state([]);
   let input = $state("");
   let streaming = $state(false);
+
+  onMount(async () => {
+    const res = await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`);
+    messages = await res.json();
+  });
 
   async function sendMessage() {
     if (!input.trim() || streaming) return;
@@ -15,10 +25,10 @@
     const assistantMsg = { role: "assistant", content: "" };
     messages.push(assistantMsg);
 
-    const response = await fetch("http://127.0.0.1:8000/api/chat", {
+    const response = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: "default", message: userText }),
+      body: JSON.stringify({ conversation_id: CONVERSATION_ID, message: userText }),
     });
 
     const reader = response.body.getReader();

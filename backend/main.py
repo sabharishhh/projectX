@@ -40,6 +40,15 @@ def init_db():
 
 init_db()
 
+def load_messages(conversation_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+        (conversation_id,),
+    ).fetchall()
+    conn.close()
+    return [{"role": r, "content": c} for r, c in rows]
+
 def save_message(conversation_id: str, role: str, content: str):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -57,14 +66,21 @@ class ChatRequest(BaseModel):
 def health():
     return {"status": "ok"}
 
+@app.get("/api/messages/{conversation_id}")
+def get_messages(conversation_id: str):
+    return load_messages(conversation_id)
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
+    history = load_messages(req.conversation_id)
     save_message(req.conversation_id, "user", req.message)
+
+    conversation = history + [{"role": "user", "content": req.message}]
 
     def event_stream():
         full_response = ""
         stream = client.responses.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
             input=req.message,
             stream=True,
         )
