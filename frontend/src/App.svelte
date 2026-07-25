@@ -169,6 +169,16 @@
     await Promise.all([loadMessages(), loadMemory()]);
   }
 
+  async function deleteConversation(id) {
+    await fetch(`${API_BASE}/api/messages/${id}`, { method: "DELETE" });
+    if (id === CONVERSATION_ID) {
+      // deleting the active thread — start a fresh one so there's
+      // never a dangling reference to a conversation that no longer exists
+      await startNewChat();
+    }
+    await loadConversations();
+  }
+
   function handleStreamClick(e) {
     const btn = e.target.closest(".copy-btn");
     if (!btn) return;
@@ -210,6 +220,7 @@
     activeId={CONVERSATION_ID}
     onNew={startNewChat}
     onSelect={switchConversation}
+    onDelete={deleteConversation}
   />
 
   <section class="chat">

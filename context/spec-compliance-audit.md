@@ -40,6 +40,14 @@ These were not mentioned in `projectX-status.md` or flagged as deliberate deferr
 
 ---
 
+## 1.4 Found and resolved during integration testing (not a spec gap — an implementation bug)
+
+| Issue | Where | Resolution |
+|---|---|---|
+| **Chat route blocked the entire event loop under load** | `backend/main.py`, `/api/chat` | Not called for by any spec, but worth recording: the route was declared `async def` while every call inside it (`httpx` sync client for memory fetches, capture, provider streaming) was synchronous and never `await`ed. FastAPI runs `async def` routes directly on the single shared event loop, so a blocking synchronous call inside one didn't yield — it stalled the *entire server*, including unrelated requests like `/health`, for the full duration of that chat turn. Found via the integration test suite (`test_projectx.py`): isolated test functions passed, but the full suite reliably hung on `ReadTimeout` once enough sequential turns had run. Confirmed by a direct check (`curl /health` during an in-flight chat turn took multiple seconds instead of ~5ms). **Fix: `async def chat(...)` → `def chat(...)`.** A plain (non-async) FastAPI route runs in a background thread pool instead of the event loop, so concurrent requests no longer block each other. Verified: full suite runtime dropped from ~450s to ~90s after the fix, with 0 timeouts across three consecutive full runs. |
+
+---
+
 ## 2. Gaps — Already Known and Documented
 
 Confirmed still accurate; no new information here, listed for completeness against this audit's scope:
