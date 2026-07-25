@@ -1,15 +1,15 @@
 <script>
-  let { memory, branch } = $props();
+  let { memory } = $props();
 </script>
 
 <aside class="panel">
   <div class="panel-head">
-    <span class="meta">viewing — {branch}</span>
+    <span class="meta">memory</span>
     <span class="count">{memory.length}</span>
   </div>
 
   {#if memory.length === 0}
-    <p class="empty small">Nothing stored on this branch yet.</p>
+    <p class="empty small">Nothing stored yet.</p>
   {:else}
     {#each memory as u}
       <article class="card">

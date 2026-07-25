@@ -15,17 +15,16 @@
   let CONVERSATION_ID = localStorage.getItem("projectx-conversation-id") || newConversationId();
   localStorage.setItem("projectx-conversation-id", CONVERSATION_ID);
 
+
   let messages = $state([]);
   let input = $state("");
   let streaming = $state(false);
   let memory = $state([]);
   let panelOpen = $state(true);
-  let branch = $state("main");
-  let branches = $state(["main"]);
   let scroller;
 
   onMount(async () => {
-    await Promise.all([loadMessages(), loadMemory(), loadBranches()]);
+    await Promise.all([loadMessages(), loadMemory()]);
   });
 
   async function loadMessages() {
@@ -33,10 +32,26 @@
     messages = await res.json();
   }
 
+  // aggregates across every branch — the user never needs to think about
+  // branches existing at all; this is just "everything I know about you"
   async function loadMemory() {
     try {
-      const res = await fetch(`${MEMORY_BASE}/state?branch=${encodeURIComponent(branch)}`);
-      memory = await res.json();
+      const branchesRes = await fetch(`${MEMORY_BASE}/branches`);
+      const branchList = await branchesRes.json();
+      const allBranches = branchList.length ? branchList : ["main"];
+
+      const results = await Promise.all(
+        allBranches.map((b) =>
+          fetch(`${MEMORY_BASE}/state?branch=${encodeURIComponent(b)}`).then((r) => r.json())
+        )
+      );
+
+      const seen = new Set();
+      memory = results.flat().filter((u) => {
+        if (seen.has(u.hash)) return false;
+        seen.add(u.hash);
+        return true;
+      });
     } catch {
       memory = [];
     }
@@ -50,20 +65,6 @@
     } catch {
       branches = ["main"];
     }
-  }
-
-  // this is now purely a viewing filter on the memory panel — chat itself
-  // is single-threaded and branch routing happens automatically per-fact
-  async function switchBranch() {
-    await loadMemory();
-  }
-
-  function newBranch() {
-    const name = prompt("Branch name (letters, numbers, - and _ only):");
-    if (!name) return;
-    if (!branches.includes(name)) branches = [...branches, name];
-    branch = name;
-    switchBranch();
   }
 
   async function startNewChat() {
@@ -151,8 +152,25 @@
 
   async function clearMemory() {
     await fetch(`${MEMORY_BASE}/reset`, { method: "POST" });
-    branch = "main";
-    await Promise.all([loadMessages(), loadMemory(), loadBranches()]);
+    await Promise.all([loadMessages(), loadMemory()]);
+  }
+
+  function handleStreamClick(e) {
+    const btn = e.target.closest(".copy-btn");
+    if (!btn) return;
+    const code = btn.closest(".code-block").querySelector("code");
+    navigator.clipboard.writeText(code.textContent);
+    const original = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => (btn.textContent = original), 1200);
+  }
+
+  function handleStreamKeydown(e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const btn = e.target.closest?.(".copy-btn");
+    if (!btn) return;
+    e.preventDefault();
+    handleStreamClick(e);
   }
 
   function handleKeydown(e) {
@@ -172,29 +190,21 @@
   />
 </svelte:head>
 
-<div class="app">
+<div class="app" style:--cols={panelOpen ? "1fr 300px" : "1fr"}>
   <section class="chat">
     <header>
       <h1>projectX</h1>
       <div class="actions">
-        <select
-          bind:value={branch}
-          onchange={switchBranch}
-          title="Filter which branch's memory is shown — doesn't affect the conversation"
-        >
-          {#each branches as b}<option value={b}>{b}</option>{/each}
-        </select>
-        <button onclick={newBranch}>+ branch</button>
         <button onclick={startNewChat}>+ new chat</button>
         <button onclick={clearChat}>Clear chat</button>
-        <button onclick={clearMemory}>Clear memory (all branches)</button>
+        <button onclick={clearMemory}>Clear memory</button>
         <button class="toggle" onclick={() => (panelOpen = !panelOpen)}>
           {panelOpen ? "Hide memory" : "Show memory"}
         </button>
       </div>
     </header>
 
-    <div class="stream" bind:this={scroller}>
+    <div class="stream" bind:this={scroller} onclick={handleStreamClick} onkeydown={handleStreamKeydown} role="presentation">
       {#if messages.length === 0}
         <p class="empty">Say something. What you reveal about yourself gets remembered.</p>
       {/if}
@@ -238,7 +248,7 @@
 
   {#if panelOpen}
     <div class="panel-wrap">
-      <MemoryPanel {memory} {branch} />
+      <MemoryPanel {memory} />
     </div>
   {/if}
 </div>
@@ -258,7 +268,7 @@
     --wash: #e2ebe7;
 
     display: grid;
-    grid-template-columns: 1fr 300px;
+    grid-template-columns: var(--cols, 1fr 300px);
     height: 100vh;
     font-family: "Instrument Sans", system-ui, sans-serif;
     color: var(--ink);
@@ -298,15 +308,6 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
-  }
-  .actions select {
-    font-family: "JetBrains Mono", monospace;
-    font-size: 0.68rem;
-    color: var(--ink-soft);
-    background: none;
-    border: 1px solid var(--rule);
-    border-radius: 2px;
-    padding: 0.28rem 0.4rem;
   }
   .actions button {
     font-family: "JetBrains Mono", monospace;
@@ -355,16 +356,119 @@
     font-size: 0.98rem;
     line-height: 1.65;
   }
-  .prose :global(pre) {
-    background: #e6e8e4;
-    border-left: 2px solid var(--verdigris);
-    padding: 0.7rem 0.9rem;
-    overflow-x: auto;
-    margin: 0.7rem 0;
+  .prose :global(p) {
+    margin: 0.6rem 0;
   }
+  .prose :global(p:first-child) {
+    margin-top: 0;
+  }
+
+  .prose :global(h1),
+  .prose :global(h2),
+  .prose :global(h3) {
+    margin: 1.1rem 0 0.5rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .prose :global(h1) { font-size: 1.25rem; }
+  .prose :global(h2) { font-size: 1.1rem; }
+  .prose :global(h3) { font-size: 1rem; }
+
+  .prose :global(ul) {
+    list-style: none;
+    margin: 0.5rem 0;
+    padding-left: 1.3rem;
+  }
+  .prose :global(ul li) {
+    position: relative;
+    margin: 0.35rem 0;
+  }
+  .prose :global(ul li::before) {
+    content: "";
+    position: absolute;
+    left: -1.05rem;
+    top: 0.55em;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--verdigris);
+  }
+
+  .prose :global(ol) {
+    margin: 0.5rem 0;
+    padding-left: 1.4rem;
+  }
+  .prose :global(ol li) {
+    margin: 0.35rem 0;
+  }
+  .prose :global(ol li::marker) {
+    color: var(--verdigris);
+    font-weight: 600;
+  }
+
+  .prose :global(a) {
+    color: var(--verdigris);
+  }
+  .prose :global(blockquote) {
+    border-left: 2px solid var(--rule);
+    margin: 0.6rem 0;
+    padding-left: 0.8rem;
+    color: var(--ink-soft);
+  }
+
   .prose :global(code) {
     font-family: "JetBrains Mono", monospace;
+    font-size: 0.85em;
+    background: #e6e8e4;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+  }
+
+  .prose :global(.code-block) {
+    margin: 0.8rem 0;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #292a28;
+  }
+  .prose :global(.code-block-header) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.4rem 0.75rem;
+    background: #201f1d;
+    border-bottom: 1px solid #3a3b38;
+  }
+  .prose :global(.code-lang) {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.7rem;
+    color: #9aa39a;
+    text-transform: lowercase;
+  }
+  .prose :global(.copy-btn) {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.68rem;
+    color: #cfd3cc;
+    background: none;
+    border: 1px solid #4a4b47;
+    border-radius: 3px;
+    padding: 0.15rem 0.5rem;
+    cursor: pointer;
+  }
+  .prose :global(.copy-btn:hover) {
+    border-color: var(--verdigris);
+    color: var(--verdigris);
+  }
+  .prose :global(.code-block pre) {
+    margin: 0;
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+  }
+  .prose :global(.code-block code) {
+    font-family: "JetBrains Mono", monospace;
     font-size: 0.82rem;
+    color: #e4e6e1;
+    background: none;
+    padding: 0;
   }
 
   .error {

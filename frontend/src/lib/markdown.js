@@ -1,19 +1,23 @@
-// minimal markdown: fenced code, inline code, bold
-export function renderMarkdown(text) {
+import { marked } from "marked";
+
+const renderer = new marked.Renderer();
+
+// custom code block: header bar with language + copy button, like Claude's UI
+renderer.code = ({ text, lang }) => {
   const esc = (s) =>
     s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const label = (lang || "").trim().split(/\s+/)[0] || "text";
+  return `<div class="code-block">
+    <div class="code-block-header">
+      <span class="code-lang">${esc(label)}</span>
+      <button class="copy-btn" type="button">Copy</button>
+    </div>
+    <pre><code>${esc(text)}</code></pre>
+  </div>`;
+};
 
-  const parts = text.split(/```(\w*)\n?([\s\S]*?)```/g);
-  let out = "";
-  for (let i = 0; i < parts.length; i++) {
-    if (i % 3 === 0) {
-      out += esc(parts[i])
-        .replace(/`([^`]+)`/g, "<code>$1</code>")
-        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/\n/g, "<br>");
-    } else if (i % 3 === 2) {
-      out += `<pre><code>${esc(parts[i])}</code></pre>`;
-    }
-  }
-  return out;
+marked.use({ renderer, gfm: true, breaks: true });
+
+export function renderMarkdown(text) {
+  return marked.parse(text);
 }
