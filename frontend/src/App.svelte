@@ -7,7 +7,13 @@
 
   const API_BASE = "http://127.0.0.1:8000";
   const MEMORY_BASE = "http://127.0.0.1:8100";
-  const CONVERSATION_ID = "default";
+
+  function newConversationId() {
+    return crypto.randomUUID();
+  }
+
+  let CONVERSATION_ID = localStorage.getItem("projectx-conversation-id") || newConversationId();
+  localStorage.setItem("projectx-conversation-id", CONVERSATION_ID);
 
   let messages = $state([]);
   let input = $state("");
@@ -25,7 +31,7 @@
   async function loadMessages() {
     const res = await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`);
     messages = await res.json();
-}
+  }
 
   async function loadMemory() {
     try {
@@ -46,10 +52,10 @@
     }
   }
 
-  // switching branches must reload BOTH the transcript and memory —
-  // this was the missing piece causing stale messages to linger
+  // this is now purely a viewing filter on the memory panel — chat itself
+  // is single-threaded and branch routing happens automatically per-fact
   async function switchBranch() {
-    await Promise.all([loadMessages(), loadMemory()]);
+    await loadMemory();
   }
 
   function newBranch() {
@@ -58,7 +64,13 @@
     if (!branches.includes(name)) branches = [...branches, name];
     branch = name;
     switchBranch();
-}
+  }
+
+  async function startNewChat() {
+    CONVERSATION_ID = newConversationId();
+    localStorage.setItem("projectx-conversation-id", CONVERSATION_ID);
+    messages = [];
+  }
 
   async function resolve(act, choice) {
     const res = await fetch(`${API_BASE}/api/memory/resolve`, {
@@ -92,7 +104,7 @@
       const response = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversation_id: CONVERSATION_ID, message: userText, branch }),
+        body: JSON.stringify({ conversation_id: CONVERSATION_ID, message: userText }),
       });
 
       const reader = response.body.getReader();
@@ -114,6 +126,10 @@
           if (ev.type === "text") {
             messages[i].content += ev.value;
           } else if (ev.type === "activity") {
+            if (ev.event.kind === "search" || ev.event.kind === "search_failed") {
+              // remove the transient "searching…" note once the real result lands
+              messages[i].activity = messages[i].activity.filter((a) => a.kind !== "searching");
+            }
             messages[i].activity.push({ ...ev.event, open: false });
             if (ev.event.kind === "memory_write") loadMemory();
           } else if (ev.type === "error") {
@@ -161,10 +177,15 @@
     <header>
       <h1>projectX</h1>
       <div class="actions">
-        <select bind:value={branch} onchange={switchBranch}>
+        <select
+          bind:value={branch}
+          onchange={switchBranch}
+          title="Filter which branch's memory is shown — doesn't affect the conversation"
+        >
           {#each branches as b}<option value={b}>{b}</option>{/each}
         </select>
         <button onclick={newBranch}>+ branch</button>
+        <button onclick={startNewChat}>+ new chat</button>
         <button onclick={clearChat}>Clear chat</button>
         <button onclick={clearMemory}>Clear memory (all branches)</button>
         <button class="toggle" onclick={() => (panelOpen = !panelOpen)}>

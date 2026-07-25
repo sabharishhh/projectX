@@ -199,6 +199,12 @@ async def chat(req: ChatRequest):
                 })
                 ledger.log("search_call", f"{search_query} ({len(distilled)} pages read)",
                            req.conversation_id, actor="system")
+            else:
+                ev = {"kind": "search_failed", "label": f"Searched, but couldn't read any results: {search_query}"}
+                activity_log.append(ev)
+                yield sse({"type": "activity", "event": ev})
+                ledger.log("search_call", f"{search_query} (0 pages read — extraction failed)",
+                           req.conversation_id, actor="system")
 
         full_response = ""
         try:

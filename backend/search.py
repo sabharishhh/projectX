@@ -1,6 +1,10 @@
+import logging
 import os
 
 import httpx
+
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+logger = logging.getLogger("search")
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "searxng")  # searxng | tavily | exa
@@ -62,5 +66,6 @@ def discover(query: str, limit: int = 5) -> list[dict]:
         if SEARCH_PROVIDER == "exa" and EXA_KEY:
             return _exa(query, limit)
         return _searxng(query, limit)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"discover failed (provider={SEARCH_PROVIDER}) for {query!r}: {e!r}")
         return []

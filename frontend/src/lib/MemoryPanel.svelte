@@ -4,7 +4,7 @@
 
 <aside class="panel">
   <div class="panel-head">
-    <span class="meta">memory — {branch}</span>
+    <span class="meta">viewing — {branch}</span>
     <span class="count">{memory.length}</span>
   </div>
 

@@ -5,6 +5,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import extraction
 import search as discovery
 
+import logging
+
+
 DISTILL_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.4-mini")
 READ_TOP_N = 3  # how many discovered pages actually get fetched + read
 
@@ -50,6 +53,7 @@ def should_search(provider, message: str) -> str | None:
 
 def _read_and_distill(provider, query: str, result: dict) -> dict | None:
     page = extraction.extract_page(result["url"])
+    logging.getLogger("extraction").info(f"extraction result for {result['url']}: method={page['method']}")
     if not page["text"]:
         return None
 

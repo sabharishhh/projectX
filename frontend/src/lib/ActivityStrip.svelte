@@ -2,12 +2,12 @@
   let { act } = $props();
 </script>
 
-{#if act.kind === "searching" || act.kind === "skill"}
+{#if act.kind === "searching" || act.kind === "search_failed"}
   <div class="activity note">{act.label}{act.kind === "searching" ? "…" : ""}</div>
 {:else}
   <div class="activity {act.kind}">
     <button class="act-head" onclick={() => (act.open = !act.open)}>
-      <span class="chev">{act.open ? "−" : "+"}</span>
+      {#if act.kind !== "skill"}<span class="chev">{act.open ? "−" : "+"}</span>{/if}
       {act.label}
     </button>
     {#if act.open}
@@ -20,6 +20,8 @@
               <span class="snippet">{r.summary}</span>
             </li>
           {/each}
+        {:else if act.kind === "skill"}
+          <!-- label-only, nothing to expand -->
         {:else}
           {#each act.units as u}
             <li>
@@ -36,17 +38,45 @@
 <style>
   .activity {
     margin-top: 0.7rem;
-    border: 1px dashed var(--verdigris);
     border-radius: 2px;
     background: var(--wash);
   }
+  /* memory recall/write — default verdigris, dashed (existing look) */
+  .activity.memory_read,
+  .activity.memory_write {
+    border: 1px dashed var(--verdigris);
+  }
+  /* skill invocation — distinct accent, solid border, no expand affordance */
+  .activity.skill {
+    border: 1px solid #6b5ecb;
+    background: #eeecf9;
+  }
+  .activity.skill .act-head {
+    color: #5442b8;
+    cursor: default;
+  }
+  /* search results — distinct accent from both memory and skill */
+  .activity.search {
+    border: 1px solid #2874a6;
+    background: #e8f1f7;
+  }
+  .activity.search .act-head {
+    color: #1f5f8b;
+  }
+
   .activity.note {
     padding: 0.4rem 0.6rem;
     font-family: "JetBrains Mono", monospace;
     font-size: 0.7rem;
     color: var(--ink-soft);
     font-style: italic;
+    animation: pulse 1.6s ease-in-out infinite;
   }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+
   .act-head {
     width: 100%;
     text-align: left;
