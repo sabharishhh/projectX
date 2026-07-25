@@ -4,6 +4,7 @@ import ledger
 import sqlite3
 import research
 import branching
+import forgetting
 from uuid import uuid4
 from fastapi import FastAPI
 import merge as merge_engine
@@ -15,7 +16,7 @@ from datetime import datetime, timezone
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message
-from capture import extract_units, commit_unit, supersede_unit
+from capture import extract_units, commit_unit, supersede_unit, forget_unit, purge_unit
 
 load_dotenv()
 
@@ -34,6 +35,7 @@ DB_PATH = "projectx.db"
 
 # conflicts awaiting the user's decision (in-process; lost on restart)
 PENDING: dict[str, dict] = {}
+PENDING_FORGETS: dict[str, dict] = {}
 
 
 def init_db():
@@ -121,6 +123,26 @@ def mark_conflict_status(conversation_id: str, conflict_id: str, resolution: str
     conn.close()
     return False
 
+def mark_forget_status(conversation_id: str, forget_id: str, resolution: str) -> bool:
+    """Same persistence pattern as mark_conflict_status — writes the
+    resolution onto the stored message's activity so it survives reload."""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT id, activity FROM messages WHERE conversation_id = ? AND activity IS NOT NULL",
+        (conversation_id,),
+    ).fetchall()
+    for row_id, activity_json in rows:
+        activity = json.loads(activity_json)
+        changed = False
+        for act in activity:
+            if act.get("kind") == "forget_request" and act.get("id") == forget_id:
+                act["resolved"] = resolution
+                changed = True
+        if changed:
+            conn.execute("UPDATE messages SET activity = ? WHERE id = ?", (json.dumps(activity), row_id))
+    conn.commit()
+    conn.close()
+    return True
 
 class ChatRequest(BaseModel):
     conversation_id: str
@@ -289,6 +311,35 @@ def chat(req: ChatRequest):
             activity_log.append(ev)
             yield sse({"type": "activity", "event": ev})
 
+        # Explicit forget requests — checked after capture/conflicts, and
+        # deliberately skips any unit capture already flagged as a conflict.
+        # Without this, a message like "I don't use vim anymore, I use emacs"
+        # could get interpreted BOTH as a contradiction (by capture) and as
+        # an implicit forget (by forget-detection) — surfacing two separate
+        # prompts asking the user to resolve the same underlying fact twice.
+        conflicted_hashes = {c["old"]["hash"] for c in conflicts}
+        forget_matches = forgetting.detect_forget_request(provider, req.message, known)
+        for m in forget_matches:
+            if m["unit"]["hash"] in conflicted_hashes:
+                continue  # capture already surfaced this as a conflict — don't ask twice
+            fid = uuid4().hex[:12]
+            PENDING_FORGETS[fid] = {
+                "hash": m["unit"]["hash"],
+                "content": m["unit"]["content"],
+                "branch": m["unit"]["branch"],
+                "source": req.conversation_id,
+            }
+            ev = {
+                "kind": "forget_request",
+                "label": "Forget this?",
+                "id": fid,
+                "content": m["unit"]["content"],
+                "reason": m["reason"],
+            }
+            activity_log.append(ev)
+            yield sse({"type": "activity", "event": ev})
+            ledger.log("forget_requested", f"candidate: {m['unit']['content']}", req.conversation_id, actor="system")
+
         save_message(req.conversation_id, "assistant", full_response, activity_log)
         yield sse({"type": "done"})
 
@@ -378,3 +429,28 @@ def merge_apply(req: MergeApplyRequest):
     )
     ledger.log("merge_applied", req.summary, req.from_branch, actor="user")
     return result
+
+class ForgetResolveRequest(BaseModel):
+    forget_id: str
+    choice: str 
+
+@app.post("/api/memory/forget")
+def resolve_forget(req: ForgetResolveRequest):
+    p = PENDING_FORGETS.pop(req.forget_id, None)
+    if not p:
+        return {"ok": False, "reason": "already resolved or expired"}
+
+    if req.choice == "soft":
+        forget_unit(p["hash"], p["source"], p["branch"], "user asked to forget this")
+        ledger.log("memory_forgotten", f"soft-forgot: {p['content']}", p["source"], actor="user")
+    elif req.choice == "hard":
+        forget_unit(p["hash"], p["source"], p["branch"], "user asked to permanently delete this")
+        purge_unit(p["hash"])
+        # per ledger-spec §4: record that a hard-delete occurred, without
+        # retaining the deleted content itself
+        ledger.log("memory_purged", f"permanently deleted a {p['branch']}-branch fact", p["source"], actor="user")
+    else:
+        ledger.log("forget_cancelled", f"kept: {p['content']}", p["source"], actor="user")
+
+    mark_forget_status(p["source"], req.forget_id, req.choice)
+    return {"ok": True}

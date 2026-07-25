@@ -115,6 +115,11 @@ struct RetrieveRequest {
     boost_types: Vec<UnitType>,
 }
 
+#[derive(Deserialize)]
+struct PurgeRequest {
+    hash: String,
+}
+
 type ApiError = (StatusCode, String);
 
 
@@ -316,6 +321,17 @@ async fn merge_apply(
     Ok(Json(serde_json::json!({ "ok": true, "commit": commit })))
 }
 
+/// Hard-delete: the unit's content is genuinely removed from disk.
+/// Callers are expected to have already soft-forgotten the unit (dropped
+/// it from HEAD) — this endpoint only concerns itself with the object store.
+async fn purge(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<PurgeRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    app.store.purge_object(&req.hash).map_err(internal)?;
+    Ok(Json(serde_json::json!({ "ok": true, "purged": req.hash })))
+}
+
 #[tokio::main]
 async fn main() {
     let root = std::env::var("MEMORY_ROOT").unwrap_or_else(|_| "./memory-store".to_string());
@@ -334,6 +350,7 @@ async fn main() {
         .route("/reset", post(reset))
         .route("/merge/preview", get(merge_preview))
         .route("/merge/apply", post(merge_apply))
+        .route("/purge", post(purge))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 

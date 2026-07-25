@@ -5,6 +5,7 @@
   import MemoryPanel from "./lib/components/MemoryPanel.svelte";
   import ConversationSidebar from "./lib/components/ConversationSidebar.svelte";
   import { renderMarkdown } from "./lib/markdown.js";
+  import ForgetBlock from "./lib/components/ForgetBlock.svelte";
 
   const API_BASE = "http://127.0.0.1:8000";
   const MEMORY_BASE = "http://127.0.0.1:8100";
@@ -179,6 +180,17 @@
     await loadConversations();
   }
 
+  async function resolveForget(act, choice) {
+    const res = await fetch(`${API_BASE}/api/memory/forget`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ forget_id: act.id, choice }),
+    });
+    const data = await res.json();
+    act.resolved = data.ok ? choice : "expired";
+    if (data.ok) await loadMemory();
+  }
+
   function handleStreamClick(e) {
     const btn = e.target.closest(".copy-btn");
     if (!btn) return;
@@ -259,6 +271,8 @@
             {#each msg.activity ?? [] as act}
               {#if act.kind === "conflict"}
                 <ConflictBlock {act} onResolve={(choice) => resolve(act, choice)} />
+              {:else if act.kind === "forget_request"}
+                <ForgetBlock {act} onResolve={(choice) => resolveForget(act, choice)} />
               {:else}
                 <ActivityStrip {act} />
               {/if}

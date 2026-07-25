@@ -201,6 +201,28 @@ mod tests {
     }
 
     #[test]
+    fn purge_removes_object_after_soft_forget() {
+        let dir = tempdir().unwrap();
+        let store = MemoryStore::open(dir.path()).unwrap();
+
+        let hash = store.put(&sample()).unwrap();
+        let c1 = store.commit("main", &Commit::new(
+            None, vec![UnitChange::Added { hash: hash.clone() }], "c1", "seed",
+        )).unwrap();
+        store.commit("main", &Commit::new(
+            Some(c1), vec![UnitChange::Superseded { hash: hash.clone() }], "c2", "forgot it",
+        )).unwrap();
+
+        assert!(store.has(&hash)); // soft-forgotten, still on disk
+        store.purge_object(&hash).unwrap();
+        assert!(!store.has(&hash)); // genuinely gone now
+
+        // state resolution still works fine — history walk never needed
+        // to re-fetch the purged unit's content
+        assert!(store.current_state("main").unwrap().is_empty());
+    }
+
+    #[test]
     fn rejects_unsafe_branch_names() {
         assert!(valid_branch_name("main"));
         assert!(valid_branch_name("work-project_2"));

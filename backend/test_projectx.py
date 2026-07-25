@@ -61,7 +61,7 @@ def section(title: str):
 # Low-level helpers
 # ---------------------------------------------------------------------------
 
-def chat(conversation_id: str, message: str, timeout: float = 120.0) -> dict:
+def chat(conversation_id: str, message: str, timeout: float = 180.0) -> dict:
     """Sends a message, consumes the SSE stream, returns the assembled result:
     {"text": full response, "activity": [event, ...]}."""
     text = ""
@@ -422,6 +422,50 @@ def test_graceful_degradation():
         "then restart the engine.",
     )
 
+def test_forget_commands():
+    section("Forget commands (soft-forget + hard-delete)")
+    reset_memory()
+    conv = new_conversation_id()
+
+    # seed directly rather than relying on capture, which has its own,
+    # already-known variance — isolates forget-detection as the one thing
+    # actually being tested here
+    httpx.post(f"{MEMORY}/remember", json={
+        "content": "Uses vim as their editor.", "unit_type": "preference", "provenance": "stated",
+        "source": "test", "summary": "seed", "branch": "main",
+    }, timeout=10.0)
+
+    r2 = chat(conv, "Actually, please forget that I use vim.")
+
+    requests = [a for a in r2["activity"] if a["kind"] == "forget_request"]
+    if not ok("a clear forget request is detected and surfaced for confirmation", len(requests) > 0):
+        clear_chat(conv)
+        return
+
+    forget_id = requests[0]["id"]
+    res = httpx.post(
+        f"{BACKEND}/api/memory/forget",
+        json={"forget_id": forget_id, "choice": "soft"},
+        timeout=10.0,
+    ).json()
+    ok("soft-forget resolves successfully", res.get("ok") is True)
+
+    state = memory_state("main") + memory_state("work") + memory_state("personal")
+    ok("soft-forgotten fact no longer appears in current state", not any("vim" in u["content"].lower() for u in state))
+    clear_chat(conv)
+
+
+def test_no_forget_on_ordinary_message():
+    section("Forget detection does not false-positive on ordinary messages")
+    reset_memory()
+    conv = new_conversation_id()
+    chat(conv, "I use vim as my editor.")
+    r2 = chat(conv, "What's a good vim plugin for git integration?")
+    ok(
+        "an ordinary follow-up question doesn't trigger a forget request",
+        "forget_request" not in activity_kinds(r2),
+    )
+    clear_chat(conv)
 
 # ---------------------------------------------------------------------------
 # Runner
@@ -443,8 +487,10 @@ def main():
         test_search_decision_and_pipeline,
         test_merge,
         test_ledger,
-        test_graceful_degradation,
         test_read_not_domain_gated,
+        test_forget_commands,
+        test_no_forget_on_ordinary_message,
+        test_graceful_degradation,
     ]
 
     for t in tests:

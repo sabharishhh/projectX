@@ -188,6 +188,19 @@ impl MemoryStore {
     fn path_for(&self, hash: &str) -> PathBuf {
         self.objects_dir.join(&hash[..2]).join(&hash[2..])
     }
+
+    /// Permanently removes a unit's content from disk. Safe to call once a
+    /// unit is already out of HEAD (superseded) — nothing in state
+    /// resolution ever re-fetches a superseded unit's content, only its
+    /// hash inside historical commit records, so this can't break replay.
+    pub fn purge_object(&self, hash: &str) -> Result<(), StoreError> {
+        let path = self.path_for(hash);
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {

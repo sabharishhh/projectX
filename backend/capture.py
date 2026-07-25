@@ -20,6 +20,17 @@ Do NOT capture:
 - topics merely discussed, rather than facts revealed about them
 - anything already in the known facts list below
 - transient state ("I'm tired today")
+- a request to forget, remove, or stop remembering something — this is a
+  deletion instruction, not a new fact. Do NOT create a unit describing
+  that they asked to forget something, and do NOT treat it as superseding
+  the original fact. A separate system handles forgetting; your job here
+  is to recognize this case and produce nothing for it.
+
+If the user EXPLICITLY asks you to remember something ("remember that...",
+"please remember...", "keep in mind that..."), you MUST capture it as a
+stated fact, even if it would otherwise seem borderline or task-like. An
+explicit request to remember is an unconditional instruction, not a
+judgment call.
 
 Mark provenance as "stated" only if they said it outright. If you're reading
 between the lines, mark it "inferred".
@@ -114,6 +125,30 @@ def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main"
             },
             timeout=3.0,
         )
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+def forget_unit(unit_hash: str, source: str, branch: str, summary: str) -> bool:
+    """Soft-forget: drops the unit from HEAD, keeps it in history."""
+    try:
+        r = httpx.post(
+            f"{MEMORY_URL}/forget",
+            json={"hash": unit_hash, "source": source, "summary": summary, "branch": branch},
+            timeout=3.0,
+        )
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+def purge_unit(unit_hash: str) -> bool:
+    """Hard-delete: the unit's content is genuinely removed from disk.
+    Callers must have already soft-forgotten the unit first."""
+    try:
+        r = httpx.post(f"{MEMORY_URL}/purge", json={"hash": unit_hash}, timeout=3.0)
         r.raise_for_status()
         return True
     except Exception:
