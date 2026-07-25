@@ -4,7 +4,7 @@ from .base import Provider
 
 class OpenAIProvider(Provider):
     def __init__(self, api_key: str):
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, timeout=60.0, max_retries=2)
 
     def stream(self, messages: list[dict], model: str) -> Iterator[str]:
         stream = self.client.responses.create(

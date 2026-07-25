@@ -157,15 +157,18 @@ def chat(req: ChatRequest):
 
     existing_branches = fetch_branches()
     allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
-    domain = branching.infer_domain(provider, req.message, existing_branches)
-    read_branches = allowed_branches if domain == "main" else ["main", domain]
 
-    # aggregate memory across the relevant branches — tagging each unit with
-    # its origin so capture can look up which branch a conflict target lives on
+    # Always read across every branch — domain classification still decides
+    # where a new fact gets *written* (capture routes work/personal/main per
+    # fact), but it no longer gates what can be *read back*. A per-turn domain
+    # guess was silently hiding whole categories of real, stored memory whenever
+    # it guessed wrong or a question didn't clearly belong to one domain.
+    # Retrieval scoring (relevance + recency + pinned set) now decides what's
+    # worth injecting, instead of a folder-like filter deciding it first.
     known = [{**u, "branch": b} for b in allowed_branches for u in fetch_state(b)]
 
     seen, injected = set(), []
-    for b in read_branches:
+    for b in allowed_branches:
         for u in fetch_relevant(
             req.message, branch=b, max_units=12,
             boost_types=(skill or {}).get("boost_types"),
@@ -196,10 +199,9 @@ def chat(req: ChatRequest):
             yield sse({"type": "activity", "event": ev})
 
         if injected:
-            branch_note = ", ".join(read_branches)
             ev = {
                 "kind": "memory_read",
-                "label": f"Recalled {len(injected)} {'fact' if len(injected) == 1 else 'facts'} ({branch_note})",
+                "label": f"Recalled {len(injected)} {'fact' if len(injected) == 1 else 'facts'}",
                 "units": injected,
             }
             activity_log.append(ev)

@@ -338,6 +338,35 @@ def test_search_decision_and_pipeline():
         ok("search pipeline resolves to a definite outcome (found results or explicitly failed)", len(outcome) == 1)
     clear_chat(conv2)
 
+def test_read_not_domain_gated():
+    section("Memory reads are not gated by domain classification (regression)")
+    reset_memory()
+    conv_b = new_conversation_id()
+
+    # seed directly on the personal branch as a pinned type (identity/preference
+    # bypass relevance scoring entirely) — isolates branch-scoping from both
+    # capture's domain guess and BM25 relevance, neither of which this test
+    # is meant to exercise
+    httpx.post(f"{MEMORY}/remember", json={
+        "content": "Has a dog named Max.", "unit_type": "identity", "provenance": "stated",
+        "source": "test", "summary": "seed", "branch": "personal",
+    }, timeout=10.0)
+
+    # a work-flavored question, in a fresh conversation — should still recall
+    # the personal-branch fact, since reads now scan every branch
+    r = chat(conv_b, "I'm starting a new job at a tech company next week. What do you know about me?")
+
+    read_events = [a for a in r["activity"] if a["kind"] == "memory_read"]
+    recalled_content = " ".join(
+        u["content"].lower() for ev in read_events for u in ev.get("units", [])
+    )
+    ok(
+        "a personal-branch fact is recalled on a work-flavored turn",
+        "max" in recalled_content or "dog" in recalled_content,
+        recalled_content[:150],
+    )
+
+    clear_chat(conv_b)
 
 def test_merge():
     section("Merge (primitives + semantic conflict detection)")
@@ -415,6 +444,7 @@ def main():
         test_merge,
         test_ledger,
         test_graceful_degradation,
+        test_read_not_domain_gated,
     ]
 
     for t in tests:

@@ -4,7 +4,7 @@ from .base import Provider
 
 class AnthropicProvider(Provider):
     def __init__(self, api_key: str):
-        self.client = Anthropic(api_key=api_key)
+        self.client = Anthropic(api_key=api_key, timeout=60.0)
 
     def stream(self, messages: list[dict], model: str) -> Iterator[str]:
         # Anthropic takes system prompts as a separate parameter, not a
