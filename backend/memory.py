@@ -9,7 +9,7 @@ IDENTITY = (
     "If asked who you are, you're projectX."
 )
 
-def fetch_state() -> list[dict]:
+def fetch_state(branch: str = "main") -> list[dict]:
     """Current memory units. Returns [] if the engine is unreachable —
     chat should still work without memory."""
     try:

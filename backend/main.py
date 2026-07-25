@@ -48,6 +48,8 @@ def init_db():
     cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
     if "activity" not in cols:
         conn.execute("ALTER TABLE messages ADD COLUMN activity TEXT")
+    if "branch" not in cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'")
     conn.commit()
     conn.close()
 
@@ -55,11 +57,11 @@ init_db()
 ledger.init_ledger()
 
 
-def load_messages(conversation_id: str):
+def load_messages(conversation_id: str, branch: str = "main"):
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT role, content, activity FROM messages WHERE conversation_id = ? ORDER BY id ASC",
-        (conversation_id,),
+        "SELECT role, content, activity FROM messages WHERE conversation_id = ? AND branch = ? ORDER BY id ASC",
+        (conversation_id, branch),
     ).fetchall()
     conn.close()
     out = []
@@ -76,11 +78,11 @@ def to_provider_messages(msgs):
     return [{"role": m["role"], "content": m["content"]} for m in msgs]
 
 
-def save_message(conversation_id: str, role: str, content: str, activity: list | None = None):
+def save_message(conversation_id: str, branch: str, role: str, content: str, activity: list | None = None):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT INTO messages (conversation_id, role, content, activity, created_at) VALUES (?, ?, ?, ?, ?)",
-        (conversation_id, role, content, json.dumps(activity) if activity else None,
+        "INSERT INTO messages (conversation_id, branch, role, content, activity, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (conversation_id, branch, role, content, json.dumps(activity) if activity else None,
          datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
@@ -104,8 +106,8 @@ def health():
 
 
 @app.get("/api/messages/{conversation_id}")
-def get_messages(conversation_id: str):
-    return load_messages(conversation_id)
+def get_messages(conversation_id: str, branch: str = "main"):
+    return load_messages(conversation_id, branch)
 
 
 @app.get("/api/ledger")
@@ -115,8 +117,8 @@ def get_ledger(limit: int = 50):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    history = load_messages(req.conversation_id)
-    save_message(req.conversation_id, "user", req.message)
+    history = load_messages(req.conversation_id, req.branch)
+    save_message(req.conversation_id, req.branch, "user", req.message)
 
     # --- CHANGE 1 LANDS HERE ---
     known = fetch_state(req.branch)  # full state — capture/dedup needs everything
@@ -198,7 +200,7 @@ async def chat(req: ChatRequest):
             activity_log.append(ev)
             yield sse({"type": "activity", "event": ev})
 
-        save_message(req.conversation_id, "assistant", full_response, activity_log)
+        save_message(req.conversation_id, req.branch, "assistant", full_response, activity_log)
         yield sse({"type": "done"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -223,10 +225,10 @@ def resolve_conflict(req: ResolveRequest):
 
 
 @app.delete("/api/messages/{conversation_id}")
-def clear_messages(conversation_id: str):
+def clear_messages(conversation_id: str, branch: str = "main"):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+    conn.execute("DELETE FROM messages WHERE conversation_id = ? AND branch = ?", (conversation_id, branch))
     conn.commit()
     conn.close()
-    ledger.log("conversation_cleared", "chat history wiped", conversation_id, actor="user")
-    return {"cleared": conversation_id}
+    ledger.log("conversation_cleared", f"branch={branch}", conversation_id, actor="user")
+    return {"cleared": conversation_id, "branch": branch}

@@ -23,7 +23,7 @@
   });
 
   async function loadMessages() {
-    const res = await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`);
+    const res = await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}?branch=${encodeURIComponent(branch)}`);
     messages = await res.json();
   }
 
@@ -46,12 +46,19 @@
     }
   }
 
+  // switching branches must reload BOTH the transcript and memory —
+  // this was the missing piece causing stale messages to linger
+  async function switchBranch() {
+    await Promise.all([loadMessages(), loadMemory()]);
+  }
+
   function newBranch() {
     const name = prompt("Branch name (letters, numbers, - and _ only):");
     if (!name) return;
+    if (!branches.includes(name)) branches = [...branches, name];
     branch = name;
-    loadMemory();
-  }
+    switchBranch();
+}
 
   async function resolve(act, choice) {
     const res = await fetch(`${API_BASE}/api/memory/resolve`, {
@@ -122,14 +129,14 @@
   }
 
   async function clearChat() {
-    await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`, { method: "DELETE" });
+    await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}?branch=${encodeURIComponent(branch)}`, { method: "DELETE" });
     messages = [];
   }
 
   async function clearMemory() {
     await fetch(`${MEMORY_BASE}/reset`, { method: "POST" });
     branch = "main";
-    await Promise.all([loadMemory(), loadBranches()]);
+    await Promise.all([loadMessages(), loadMemory(), loadBranches()]);
   }
 
   function handleKeydown(e) {
@@ -154,7 +161,7 @@
     <header>
       <h1>projectX</h1>
       <div class="actions">
-        <select bind:value={branch} onchange={loadMemory}>
+        <select bind:value={branch} onchange={switchBranch}>
           {#each branches as b}<option value={b}>{b}</option>{/each}
         </select>
         <button onclick={newBranch}>+ branch</button>
