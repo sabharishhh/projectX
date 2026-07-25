@@ -2,14 +2,13 @@ import os
 import json
 import sqlite3
 from uuid import uuid4
-import search as web_search
+import research
 from pydantic import BaseModel
 import merge as merge_engine
 from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 from dotenv import load_dotenv
 from providers import get_provider
 from memory import fetch_state, fetch_relevant, build_system_message
@@ -123,15 +122,13 @@ async def chat(req: ChatRequest):
     history = load_messages(req.conversation_id, req.branch)
     save_message(req.conversation_id, req.branch, "user", req.message)
 
-    # --- CHANGE 1 LANDS HERE ---
     known = fetch_state(req.branch)  # full state — capture/dedup needs everything
     injected = fetch_relevant(req.message, branch=req.branch, max_units=12)  # scored subset — what the model actually sees
-    
+
     # Notice we pass `injected` to the system message, not `known`
     conversation = [build_system_message(injected)] + to_provider_messages(history) + [
         {"role": "user", "content": req.message}
     ]
-    # ---------------------------
 
     ledger.log("provider_call", f"model={model}", req.conversation_id, actor="user")
 
@@ -141,7 +138,6 @@ async def chat(req: ChatRequest):
     def event_stream():
         activity_log = []
 
-        # --- CHANGE 2 LANDS HERE ---
         # The UI should only show what was actually injected into the context window
         if injected:
             ev = {
@@ -151,26 +147,30 @@ async def chat(req: ChatRequest):
             }
             activity_log.append(ev)
             yield sse({"type": "activity", "event": ev})
-        # ---------------------------
-        search_query = web_search.should_search(provider, req.message)
+
+        search_query = research.should_search(provider, req.message)
         if search_query:
-            results = web_search.search(search_query)
-            if results:
+            # fires immediately so the UI shows activity before the (slower)
+            # fetch+read+distill pipeline finishes
+            yield sse({"type": "activity", "event": {"kind": "searching", "label": f"Searching: {search_query}"}})
+
+            distilled = research.research(provider, search_query)
+            if distilled:
                 ev = {
                     "kind": "search",
-                    "label": f"Searched the web: {search_query}",
-                    "results": results,
+                    "label": f"Read {len(distilled)} page{'s' if len(distilled) != 1 else ''}: {search_query}",
+                    "results": distilled,
                 }
                 activity_log.append(ev)
                 yield sse({"type": "activity", "event": ev})
 
                 conversation.append({
                     "role": "system",
-                    "content": web_search.format_for_context(search_query, results),
+                    "content": research.format_for_context(search_query, distilled),
                 })
-                ledger.log("search_call", f"{search_query} ({len(results)} results)",
+                ledger.log("search_call", f"{search_query} ({len(distilled)} pages read)",
                            req.conversation_id, actor="system")
-                
+
         full_response = ""
         try:
             for chunk in provider.stream(conversation, model):
@@ -192,7 +192,12 @@ async def chat(req: ChatRequest):
             )
             if target:
                 cid = uuid4().hex[:12]
-                PENDING[cid] = {"from": target["hash"], "unit": u, "source": req.conversation_id}
+                PENDING[cid] = {
+                    "from": target["hash"],
+                    "unit": u,
+                    "source": req.conversation_id,
+                    "branch": req.branch,
+                }
                 conflicts.append({"id": cid, "old": target, "new": u})
                 ledger.log("conflict_raised",
                            f"'{u['content']}' conflicts with '{target['content']}'",
