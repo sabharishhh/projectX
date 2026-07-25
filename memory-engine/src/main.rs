@@ -82,6 +82,40 @@ struct CommitView {
     commit: Commit,
 }
 
+#[derive(Deserialize)]
+struct MergePreviewQuery {
+    from: String,
+    into: String,
+}
+
+#[derive(Serialize)]
+struct MergePreview {
+    incoming: Vec<UnitView>,  // live on source, absent from target
+    existing: Vec<UnitView>,  // live on target — what incoming might conflict with
+}
+
+#[derive(Deserialize)]
+struct Replacement {
+    /// hash of the target unit being superseded
+    from: String,
+    /// hash of the incoming unit replacing it
+    to: String,
+}
+
+#[derive(Deserialize)]
+struct MergeApplyRequest {
+    from: String,
+    into: String,
+    /// incoming hashes to bring over as-is
+    #[serde(default)]
+    adopt: Vec<String>,
+    /// incoming units that replace an existing target unit
+    #[serde(default)]
+    replace: Vec<Replacement>,
+    source: String,
+    summary: String,
+}
+
 type ApiError = (StatusCode, String);
 
 fn internal(e: impl std::fmt::Debug) -> ApiError {
@@ -212,6 +246,72 @@ async fn reset(State(app): State<Arc<AppState>>) -> Result<Json<serde_json::Valu
     Ok(Json(serde_json::json!({ "reset": true })))
 }
 
+/// What merging `from` into `into` would bring over. Read-only.
+async fn merge_preview(
+    State(app): State<Arc<AppState>>,
+    Query(q): Query<MergePreviewQuery>,
+) -> Result<Json<MergePreview>, ApiError> {
+    check_branch(&q.from)?;
+    check_branch(&q.into)?;
+
+    let source = app.store.current_state(&q.from).map_err(internal)?;
+    let target = app.store.current_state(&q.into).map_err(internal)?;
+
+    let target_hashes: std::collections::HashSet<&String> =
+        target.iter().map(|(h, _)| h).collect();
+
+    let incoming = source
+        .iter()
+        .filter(|(h, _)| !target_hashes.contains(h))
+        .map(|(h, u)| UnitView { hash: h.clone(), unit: u.clone() })
+        .collect();
+
+    let existing = target
+        .into_iter()
+        .map(|(hash, unit)| UnitView { hash, unit })
+        .collect();
+
+    Ok(Json(MergePreview { incoming, existing }))
+}
+
+/// Applies a merge as a single commit on the target branch.
+/// Nothing is deleted — replaced units are superseded and stay in history.
+async fn merge_apply(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<MergeApplyRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check_branch(&req.from)?;
+    check_branch(&req.into)?;
+
+    let mut changes = Vec::new();
+
+    for hash in &req.adopt {
+        if !app.store.has(hash) {
+            return Err((StatusCode::BAD_REQUEST, format!("unknown unit: {hash}")));
+        }
+        changes.push(UnitChange::Added { hash: hash.clone() });
+    }
+
+    for r in &req.replace {
+        if !app.store.has(&r.to) {
+            return Err((StatusCode::BAD_REQUEST, format!("unknown unit: {}", r.to)));
+        }
+        changes.push(UnitChange::Modified { from: r.from.clone(), to: r.to.clone() });
+    }
+
+    if changes.is_empty() {
+        return Ok(Json(serde_json::json!({ "ok": true, "commit": null, "note": "nothing to merge" })));
+    }
+
+    let parent = app.store.head(&req.into).map_err(internal)?;
+    let commit = app
+        .store
+        .commit(&req.into, &Commit::new(parent, changes, req.source.clone(), req.summary.clone()))
+        .map_err(internal)?;
+
+    Ok(Json(serde_json::json!({ "ok": true, "commit": commit })))
+}
+
 #[tokio::main]
 async fn main() {
     let root = std::env::var("MEMORY_ROOT").unwrap_or_else(|_| "./memory-store".to_string());
@@ -228,6 +328,8 @@ async fn main() {
         .route("/retrieve", post(retrieve))
         .route("/history", get(history))
         .route("/reset", post(reset))
+        .route("/merge/preview", get(merge_preview))
+        .route("/merge/apply", post(merge_apply))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 
