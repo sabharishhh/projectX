@@ -2,6 +2,7 @@ import os
 import json
 import sqlite3
 from uuid import uuid4
+import search as web_search
 from pydantic import BaseModel
 import merge as merge_engine
 from datetime import datetime, timezone
@@ -151,7 +152,25 @@ async def chat(req: ChatRequest):
             activity_log.append(ev)
             yield sse({"type": "activity", "event": ev})
         # ---------------------------
+        search_query = web_search.should_search(provider, req.message)
+        if search_query:
+            results = web_search.search(search_query)
+            if results:
+                ev = {
+                    "kind": "search",
+                    "label": f"Searched the web: {search_query}",
+                    "results": results,
+                }
+                activity_log.append(ev)
+                yield sse({"type": "activity", "event": ev})
 
+                conversation.append({
+                    "role": "system",
+                    "content": web_search.format_for_context(search_query, results),
+                })
+                ledger.log("search_call", f"{search_query} ({len(results)} results)",
+                           req.conversation_id, actor="system")
+                
         full_response = ""
         try:
             for chunk in provider.stream(conversation, model):

@@ -8,14 +8,25 @@
     {act.label}
   </button>
   {#if act.open}
-    <ul class="act-body">
-      {#each act.units as u}
-        <li>
-          <span class="meta">{u.unit_type} · {u.provenance}</span>
-          {u.content}
-        </li>
-      {/each}
-    </ul>
+    {#if act.kind === "search"}
+      <ul class="act-body">
+        {#each act.results as r}
+          <li>
+            <a href={r.url} target="_blank" rel="noopener">{r.title}</a>
+            <span class="snippet">{r.snippet}</span>
+          </li>
+        {/each}
+      </ul>
+    {:else}
+      <ul class="act-body">
+        {#each act.units as u}
+          <li>
+            <span class="meta">{u.unit_type} · {u.provenance}</span>
+            {u.content}
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 </div>
 
@@ -59,5 +70,16 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--verdigris);
+  }
+  .act-body a {
+    color: var(--verdigris);
+    font-size: 0.85rem;
+  }
+  .snippet {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    line-height: 1.4;
+    margin-top: 0.15rem;
   }
 </style>
