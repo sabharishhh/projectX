@@ -23,6 +23,7 @@
         count={group.items.length}
         accent="var(--accent-memory)"
         open={group.type === 'identity'}
+        boxed={false}
       >
         <ul>
           {#each group.items as u (u.hash)}
