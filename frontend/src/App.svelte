@@ -3,7 +3,7 @@
   import ActivityStrip from "./lib/components/ActivityStrip.svelte";
   import ConflictBlock from "./lib/components/ConflictBlock.svelte";
   import MemoryPanel from "./lib/components/MemoryPanel.svelte";
-  import ConversationSidebar from "./lib/ConversationSidebar.svelte";
+  import ConversationSidebar from "./lib/components/ConversationSidebar.svelte";
   import { renderMarkdown } from "./lib/markdown.js";
 
   const API_BASE = "http://127.0.0.1:8000";
@@ -290,28 +290,16 @@
 </div>
 
 <style>
-  :global(body) {
-    margin: 0;
-    background: #edeeec;
-  }
-
   .app {
-    --paper: #edeeec;
-    --ink: #1a1d1a;
-    --ink-soft: #5f665f;
-    --rule: #d4d7d1;
-    --verdigris: #2f6f62;
-    --wash: #e2ebe7;
-
     display: grid;
     grid-template-columns: var(--cols, 220px 1fr 300px);
     height: 100vh;
-    font-family: "Instrument Sans", system-ui, sans-serif;
-    color: var(--ink);
-    background-color: var(--paper);
+    font-family: var(--font-voice);
+    color: var(--text-primary);
+    background-color: var(--surface-page);
     background-image:
-      linear-gradient(rgba(47, 111, 98, 0.05) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(47, 111, 98, 0.05) 1px, transparent 1px);
+      linear-gradient(color-mix(in srgb, var(--accent-memory) 5%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--accent-memory) 5%, transparent) 1px, transparent 1px);
     background-size: 26px 26px;
   }
 
@@ -324,6 +312,10 @@
 
   .panel-wrap {
     min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-4);
+    border-left: 0.5px solid var(--border-hairline);
+    background: var(--surface-veil);
   }
 
   header {
@@ -332,7 +324,7 @@
     justify-content: flex-end;
     gap: 1rem;
     padding: 0.9rem 1.5rem;
-    border-bottom: 1px solid var(--rule);
+    border-bottom: 0.5px solid var(--border-hairline);
   }
   .actions {
     display: flex;
@@ -340,19 +332,19 @@
     gap: 0.4rem;
   }
   .actions button {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-technical);
     font-size: 0.68rem;
     letter-spacing: 0.03em;
-    color: var(--ink-soft);
+    color: var(--text-secondary);
     background: none;
-    border: 1px solid var(--rule);
-    border-radius: 2px;
+    border: 0.5px solid var(--border-hairline);
+    border-radius: var(--radius-sm);
     padding: 0.3rem 0.55rem;
     cursor: pointer;
   }
   .actions button:hover {
-    color: var(--verdigris);
-    border-color: var(--verdigris);
+    color: var(--accent-memory);
+    border-color: var(--accent-memory);
   }
 
   .stream {
@@ -370,10 +362,10 @@
   }
   .said {
     max-width: 34rem;
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--text-primary);
+    color: var(--surface-page);
     padding: 0.55rem 0.85rem;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font-size: 0.92rem;
     line-height: 1.5;
     white-space: pre-wrap;
@@ -421,7 +413,7 @@
     width: 5px;
     height: 5px;
     border-radius: 50%;
-    background: var(--verdigris);
+    background: var(--accent-memory);
   }
 
   .prose :global(ol) {
@@ -432,28 +424,30 @@
     margin: 0.35rem 0;
   }
   .prose :global(ol li::marker) {
-    color: var(--verdigris);
+    color: var(--accent-memory);
     font-weight: 600;
   }
 
   .prose :global(a) {
-    color: var(--verdigris);
+    color: var(--accent-memory);
   }
   .prose :global(blockquote) {
-    border-left: 2px solid var(--rule);
+    border-left: 2px solid var(--border-hairline);
     margin: 0.6rem 0;
     padding-left: 0.8rem;
-    color: var(--ink-soft);
+    color: var(--text-secondary);
   }
 
   .prose :global(code) {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-technical);
     font-size: 0.85em;
-    background: #e6e8e4;
+    background: var(--surface-sunken);
     padding: 0.1rem 0.35rem;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
   }
 
+  /* code blocks stay a fixed dark "editor" look regardless of app theme —
+     deliberate, not a token migration gap */
   .prose :global(.code-block) {
     margin: 0.8rem 0;
     border-radius: 6px;
@@ -469,13 +463,13 @@
     border-bottom: 1px solid #3a3b38;
   }
   .prose :global(.code-lang) {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-technical);
     font-size: 0.7rem;
     color: #9aa39a;
     text-transform: lowercase;
   }
   .prose :global(.copy-btn) {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-technical);
     font-size: 0.68rem;
     color: #cfd3cc;
     background: none;
@@ -485,8 +479,8 @@
     cursor: pointer;
   }
   .prose :global(.copy-btn:hover) {
-    border-color: var(--verdigris);
-    color: var(--verdigris);
+    border-color: var(--accent-memory);
+    color: var(--accent-memory);
   }
   .prose :global(.code-block pre) {
     margin: 0;
@@ -494,7 +488,7 @@
     overflow-x: auto;
   }
   .prose :global(.code-block code) {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-technical);
     font-size: 0.82rem;
     color: #e4e6e1;
     background: none;
@@ -504,21 +498,21 @@
   .error {
     margin-top: 0.6rem;
     padding: 0.5rem 0.7rem;
-    border-left: 2px solid #9c3b2e;
-    background: #f2e4e1;
+    border-left: 2px solid var(--border-danger);
+    background: var(--bg-danger);
     font-size: 0.85rem;
   }
   .error .tag {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-technical);
     font-size: 0.62rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #9c3b2e;
+    color: var(--text-danger);
     margin-right: 0.5rem;
   }
 
   .empty {
-    color: var(--ink-soft);
+    color: var(--text-secondary);
     font-size: 0.9rem;
     font-style: italic;
   }
@@ -528,7 +522,7 @@
     gap: 0.5rem;
     align-items: flex-end;
     padding: 1rem 1.5rem 1.4rem;
-    border-top: 1px solid var(--rule);
+    border-top: 0.5px solid var(--border-hairline);
   }
   textarea {
     flex: 1;
@@ -537,26 +531,26 @@
     font-size: 0.95rem;
     line-height: 1.5;
     padding: 0.6rem 0.75rem;
-    border: 1px solid var(--rule);
-    border-radius: 3px;
-    background: rgba(255, 255, 255, 0.55);
-    color: var(--ink);
+    border: 0.5px solid var(--border-hairline);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+    color: var(--text-primary);
     min-height: 2.6rem;
     max-height: 40vh;
   }
   textarea:focus {
-    outline: 2px solid var(--verdigris);
+    outline: 2px solid var(--accent-memory);
     outline-offset: -1px;
   }
   .send {
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-technical);
     font-size: 0.72rem;
     letter-spacing: 0.05em;
     padding: 0.65rem 1.1rem;
-    background: var(--verdigris);
-    color: var(--paper);
+    background: var(--accent-memory);
+    color: var(--surface-page);
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .send:disabled {

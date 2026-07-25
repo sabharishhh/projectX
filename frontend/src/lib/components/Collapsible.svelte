@@ -47,7 +47,7 @@
   .trigger:hover { background:none; color:var(--text-primary); }
   .trigger:hover .chevron { opacity:1; }
   .trigger i { font-size:15px; color:var(--accent); }
-  .label { flex:1; }
+  .label { flex:1; font-weight:var(--weight-medium); letter-spacing:0.01em; }
   .count { color:var(--text-muted); }
   .chevron {
     opacity:.5; color:var(--text-muted);

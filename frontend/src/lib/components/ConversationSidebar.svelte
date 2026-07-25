@@ -37,8 +37,8 @@
   .sidebar {
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--rule);
-    background: rgba(255, 255, 255, 0.35);
+    border-right: 0.5px solid var(--border-hairline);
+    background: var(--surface-veil);
     height: 100%;
     overflow: hidden;
   }
@@ -47,19 +47,19 @@
     font-weight: 600;
     font-size: 0.95rem;
     letter-spacing: -0.01em;
-    border-bottom: 1px solid var(--rule);
+    border-bottom: 0.5px solid var(--border-hairline);
   }
   .new-chat {
     margin: 0.75rem;
     padding: 0.5rem 0.7rem;
-    font-family: "JetBrains Mono", monospace;
+    font-family: var(--font-technical);
     font-size: 0.72rem;
     letter-spacing: 0.03em;
     text-align: left;
-    background: var(--verdigris);
-    color: var(--paper);
+    background: var(--accent-memory);
+    color: var(--surface-page);
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .new-chat:hover {
@@ -76,14 +76,14 @@
   .row {
     display: flex;
     align-items: center;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
   }
   .row:hover {
-    background: var(--wash);
+    background: var(--surface-sunken);
   }
   .row.active {
-    background: var(--wash);
-    border-left: 2px solid var(--verdigris);
+    background: var(--surface-sunken);
+    border-left: 2px solid var(--accent-memory);
   }
   .conv {
     flex: 1;
@@ -93,7 +93,7 @@
     padding: 0.5rem 0.6rem;
     font-size: 0.82rem;
     line-height: 1.3;
-    color: var(--ink-soft);
+    color: var(--text-secondary);
     background: none;
     border: none;
     cursor: pointer;
@@ -102,7 +102,7 @@
     text-overflow: ellipsis;
   }
   .row.active .conv {
-    color: var(--ink);
+    color: var(--text-primary);
     font-weight: 600;
   }
   .delete-btn {
@@ -115,23 +115,23 @@
     justify-content: center;
     font-size: 0.95rem;
     line-height: 1;
-    color: var(--ink-soft);
+    color: var(--text-secondary);
     background: none;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .row:hover .delete-btn {
     display: flex;
   }
   .delete-btn:hover {
-    color: #9c3b2e;
-    background: #f2e4e1;
+    color: var(--text-danger);
+    background: var(--bg-danger);
   }
   .empty {
     padding: 0.6rem 0.75rem;
     font-size: 0.8rem;
     font-style: italic;
-    color: var(--ink-soft);
+    color: var(--text-secondary);
   }
 </style>

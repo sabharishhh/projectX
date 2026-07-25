@@ -2,7 +2,7 @@
   import Collapsible from './Collapsible.svelte';
   import { reveal } from '$lib/motion.js';
 
-  let { events = [] } = $props();
+  let { act } = $props();
 
   const KINDS = {
     memory_read:  { icon:'ti-notebook',      accent:'var(--accent-memory)' },
@@ -13,47 +13,50 @@
     search_failed:{ icon:'ti-plug-off',      accent:'var(--accent-attention)' }
   };
 
-  const meta = (k) => KINDS[k] ?? { icon:'ti-point', accent:'var(--accent-skill)' };
-  const inFlight = $derived(events.some((e) => e.kind === 'searching'));
+  const m = $derived(KINDS[act.kind] ?? { icon:'ti-point', accent:'var(--accent-skill)' });
 </script>
 
-<aside class="rail" aria-label="What happened this turn">
-  {#each events as event (event.label)}
-    {@const m = meta(event.kind)}
-    {#if event.units?.length}
-      <Collapsible label={event.label} icon={m.icon} accent={m.accent} count={event.units.length}>
-        <ul class="units">
-          {#each event.units as u}
-            <li in:reveal>
-              <span class={u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}>
-                {u.content}
-              </span>
-              <span class="technical type">{u.unit_type}</span>
-            </li>
-          {/each}
-        </ul>
-      </Collapsible>
-    {:else}
-      <p class="line" style="--accent:{m.accent}" class:pulsing={event.kind === 'searching' && inFlight}>
-        <i class="ti {m.icon}" aria-hidden="true"></i>{event.label}
-      </p>
-    {/if}
-  {/each}
-</aside>
+{#if act.units?.length}
+  <Collapsible label={act.label} icon={m.icon} accent={m.accent} count={act.units.length}>
+    <ul class="units">
+      {#each act.units as u}
+        <li in:reveal>
+          <span class={u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}>
+            {u.content}
+          </span>
+          <span class="technical type">{u.unit_type}</span>
+        </li>
+      {/each}
+    </ul>
+  </Collapsible>
+{:else if act.results?.length}
+  <Collapsible label={act.label} icon={m.icon} accent={m.accent} count={act.results.length}>
+    <ul class="results">
+      {#each act.results as r}
+        <li in:reveal>
+          <a href={r.url} target="_blank" rel="noreferrer">{r.title}</a>
+          <p class="summary">{r.summary}</p>
+        </li>
+      {/each}
+    </ul>
+  </Collapsible>
+{:else}
+  <p class="line" style="--accent:{m.accent}" class:pulsing={act.kind === 'searching'}>
+    <i class="ti {m.icon}" aria-hidden="true"></i>{act.label}
+  </p>
+{/if}
 
 <style>
-  .rail { width:var(--rail-width); display:flex; flex-direction:column; gap:var(--space-1); }
   .line {
-    display:flex; align-items:center; gap:var(--space-2); margin:0;
-    padding:var(--space-2) 0; font-size:var(--size-meta); color:var(--text-secondary);
+    display:flex; align-items:center; gap:var(--space-2); margin:0.4rem 0 0;
+    font-size:var(--size-meta); color:var(--text-secondary);
   }
   .line i { font-size:15px; color:var(--accent); }
   .pulsing i { animation:breathe 1.6s var(--ease-inout) infinite; }
   @keyframes breathe { 0%,100% { opacity:.4 } 50% { opacity:1 } }
-  .units { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2); }
+  .units, .results { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2); }
   .units li { font-size:var(--size-meta); line-height:var(--leading-tight); }
   .type { display:block; color:var(--text-muted); margin-top:2px; }
-  @media (max-width:900px) {
-    .rail { width:100%; border-top:0.5px solid var(--border-hairline); padding-top:var(--space-2); }
-  }
+  .results a { color:var(--accent-search); font-size:var(--size-meta); }
+  .results .summary { margin:2px 0 0; color:var(--text-secondary); font-size:var(--size-caption); }
 </style>

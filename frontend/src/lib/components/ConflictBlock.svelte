@@ -1,32 +1,32 @@
 <script>
   import { arrive, reveal } from '$lib/motion.js';
 
-  let { conflict, onresolve } = $props();
-  let state = $state('open'); // open | resolving | done | expired
+  let { act, onResolve } = $props();
+  let busy = $state(false);
 
   async function choose(choice) {
-    state = 'resolving';
-    const res = await onresolve(conflict.id, choice);
-    state = res?.ok ? 'done' : 'expired';
+    busy = true;
+    await onResolve(choice);
+    busy = false;
   }
 </script>
 
 <section class="conflict" in:arrive aria-live="polite">
   <p class="heading"><i class="ti ti-alert-circle" aria-hidden="true"></i>This changes something I already knew</p>
 
-  {#if state === 'done'}
-    <p class="resolved" in:reveal>Noted — memory updated.</p>
-  {:else if state === 'expired'}
+  {#if act.resolved === 'expired'}
     <p class="resolved" in:reveal>This one expired when the backend restarted. Tell me again and I'll store it.</p>
+  {:else if act.resolved}
+    <p class="resolved" in:reveal>Noted — memory updated.</p>
   {:else}
     <div class="pair">
-      <p class="was">was: {conflict.old.content}</p>
-      <p class="now">now: {conflict.new.content}</p>
+      <p class="was">was: {act.old.content}</p>
+      <p class="now">now: {act.new.content}</p>
     </div>
-    <div class="choices" class:busy={state === 'resolving'}>
-      <button onclick={() => choose('update')}>Replace it</button>
-      <button onclick={() => choose('keep_both')}>Both are true</button>
-      <button onclick={() => choose('keep_old')}>Ignore this</button>
+    <div class="choices" class:busy>
+      <button onclick={() => choose('update')} disabled={busy}>Replace it</button>
+      <button onclick={() => choose('keep_both')} disabled={busy}>Both are true</button>
+      <button onclick={() => choose('keep_old')} disabled={busy}>Ignore this</button>
     </div>
   {/if}
 </section>
