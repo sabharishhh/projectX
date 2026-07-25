@@ -38,6 +38,14 @@ def fetch_relevant(query: str, branch: str = "main", max_units: int = 12, boost_
     except Exception:
         return []
 
+def fetch_branches() -> list[str]:
+    try:
+        r = httpx.get(f"{MEMORY_URL}/branches", timeout=2.0)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
 def build_system_message(units: list[dict], skill_prompt: str | None = None) -> dict:
     parts = [IDENTITY]
 

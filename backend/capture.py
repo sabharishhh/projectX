@@ -24,6 +24,11 @@ Do NOT capture:
 Mark provenance as "stated" only if they said it outright. If you're reading
 between the lines, mark it "inferred".
 
+For each fact, also decide which branch it belongs on, from this list:
+{branches}
+Use "main" unless the fact is clearly and specifically about one of the other
+listed domains. Never invent a branch name not in this list.
+
 Known facts already stored:
 {known}
 
@@ -33,7 +38,7 @@ Only for real contradictions, where both cannot be true at once. Do NOT use it
 for facts that merely relate to, extend, or sit alongside an existing one.
 
 Return JSON only, no other text:
-{{"units": [{{"content": "...", "unit_type": "preference", "provenance": "stated", "summary": "short plain-language note on what changed", "supersedes": "a1b2c3d4"}}]}}
+{{"units": [{{"content": "...", "unit_type": "preference", "provenance": "stated", "summary": "short plain-language note on what changed", "branch": "main", "supersedes": "a1b2c3d4"}}]}}
 
 Omit "supersedes" entirely when the fact is new rather than a replacement.
 Return {{"units": []}} if nothing is worth remembering."""
@@ -46,22 +51,24 @@ def _known_facts_block(units: list[dict]) -> str:
 
 
 def extract_units(provider, user_message: str, assistant_message: str,
-                  known: list[dict]) -> list[dict]:
-    """Ask a small model what's worth remembering. Returns [] on any failure —
-    capture must never break the chat."""
-    prompt = CAPTURE_PROMPT.format(known=_known_facts_block(known))
+                  known: list[dict], branches: list[str]) -> list[dict]:
+    prompt = CAPTURE_PROMPT.format(
+        known=_known_facts_block(known),
+        branches=", ".join(branches),
+    )
     exchange = f"User: {user_message}\n\nAssistant: {assistant_message}"
 
     try:
         raw = "".join(provider.stream(
-            [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": exchange},
-            ],
-            CAPTURE_MODEL,
+            [{"role": "system", "content": prompt}, {"role": "user", "content": exchange}],
+            os.getenv("CAPTURE_MODEL", "gpt-5.4-mini"),
         ))
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-        return parsed.get("units", [])
+        units = parsed.get("units", [])
+        for u in units:
+            if u.get("branch") not in branches:
+                u["branch"] = "main"
+        return units
     except Exception:
         return []
 

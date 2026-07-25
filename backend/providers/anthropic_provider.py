@@ -7,6 +7,10 @@ class AnthropicProvider(Provider):
         self.client = Anthropic(api_key=api_key)
 
     def stream(self, messages: list[dict], model: str) -> Iterator[str]:
+        # Anthropic takes system prompts as a separate parameter, not a
+        # message in the list — and there can be more than one system
+        # message by the time skills/search have both appended context,
+        # so join all of them rather than assuming just the first.
         system = "".join(m["content"] for m in messages if m["role"] == "system")
         turns = [m for m in messages if m["role"] != "system"]
 

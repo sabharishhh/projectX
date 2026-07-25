@@ -1,20 +1,21 @@
 import os
 import json
+import ledger
 import sqlite3
 import research
-from uuid import uuid4 
-import skills as skill_registry
-from pydantic import BaseModel
-import merge as merge_engine
-from datetime import datetime, timezone
+import branching
+from uuid import uuid4
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+import merge as merge_engine
+from pydantic import BaseModel
 from dotenv import load_dotenv
+import skills as skill_registry
 from providers import get_provider
-from memory import fetch_state, fetch_relevant, build_system_message
+from datetime import datetime, timezone
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message
 from capture import extract_units, commit_unit, supersede_unit
-import ledger
 
 load_dotenv()
 
@@ -47,7 +48,10 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
-    # migration for dbs created before the activity column existed
+    # migrations for dbs created before these columns existed. The `branch`
+    # column is left in place (unused) rather than dropped — conversations
+    # are single-threaded again now that branch inference is per-fact, not
+    # per-conversation, but no need to churn the schema to remove it.
     cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
     if "activity" not in cols:
         conn.execute("ALTER TABLE messages ADD COLUMN activity TEXT")
@@ -60,11 +64,11 @@ init_db()
 ledger.init_ledger()
 
 
-def load_messages(conversation_id: str, branch: str = "main"):
+def load_messages(conversation_id: str):
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT role, content, activity FROM messages WHERE conversation_id = ? AND branch = ? ORDER BY id ASC",
-        (conversation_id, branch),
+        "SELECT role, content, activity FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+        (conversation_id,),
     ).fetchall()
     conn.close()
     out = []
@@ -81,11 +85,11 @@ def to_provider_messages(msgs):
     return [{"role": m["role"], "content": m["content"]} for m in msgs]
 
 
-def save_message(conversation_id: str, branch: str, role: str, content: str, activity: list | None = None):
+def save_message(conversation_id: str, role: str, content: str, activity: list | None = None):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT INTO messages (conversation_id, branch, role, content, activity, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (conversation_id, branch, role, content, json.dumps(activity) if activity else None,
+        "INSERT INTO messages (conversation_id, role, content, activity, created_at) VALUES (?, ?, ?, ?, ?)",
+        (conversation_id, role, content, json.dumps(activity) if activity else None,
          datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
@@ -95,7 +99,6 @@ def save_message(conversation_id: str, branch: str, role: str, content: str, act
 class ChatRequest(BaseModel):
     conversation_id: str
     message: str
-    branch: str = "main"
 
 
 class ResolveRequest(BaseModel):
@@ -109,8 +112,8 @@ def health():
 
 
 @app.get("/api/messages/{conversation_id}")
-def get_messages(conversation_id: str, branch: str = "main"):
-    return load_messages(conversation_id, branch)
+def get_messages(conversation_id: str):
+    return load_messages(conversation_id)
 
 
 @app.get("/api/ledger")
@@ -120,28 +123,39 @@ def get_ledger(limit: int = 50):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    history = load_messages(req.conversation_id, req.branch)
-    save_message(req.conversation_id, req.branch, "user", req.message)
+    history = load_messages(req.conversation_id)
+    save_message(req.conversation_id, "user", req.message)
 
     skill = skill_registry.select(provider, req.message)
 
-    known = fetch_state(req.branch)
-    injected = fetch_relevant(
-        req.message,
-        branch=req.branch,
-        max_units=12,
-        boost_types=(skill or {}).get("boost_types"),
-    )
+    existing_branches = fetch_branches()
+    allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
+    domain = branching.infer_domain(provider, req.message, existing_branches)
+    read_branches = ["main"] if domain == "main" else ["main", domain]
 
-    # Notice we pass `injected` to the system message, not `known`
+    # aggregate memory across the relevant branches — tagging each unit with
+    # its origin so capture can look up which branch a conflict target lives on
+    known = [{**u, "branch": b} for b in allowed_branches for u in fetch_state(b)]
+
+    seen, injected = set(), []
+    for b in read_branches:
+        for u in fetch_relevant(
+            req.message, branch=b, max_units=12,
+            boost_types=(skill or {}).get("boost_types"),
+        ):
+            if u["hash"] not in seen:
+                seen.add(u["hash"])
+                injected.append({**u, "branch": b})
+    injected = injected[:12]
+
     conversation = [build_system_message(injected, (skill or {}).get("system_prompt"))] \
         + to_provider_messages(history) \
         + [{"role": "user", "content": req.message}]
 
     ledger.log("provider_call", f"model={model}", req.conversation_id, actor="user")
-
     if skill:
-        ledger.log("skill_invoked", f"{skill['name']}: {req.message[:60]}", req.conversation_id, actor="system")
+        ledger.log("skill_invoked", f"{skill['name']}: {req.message[:60]}",
+                   req.conversation_id, actor="system")
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps(payload)}\n\n"
@@ -155,9 +169,10 @@ async def chat(req: ChatRequest):
             yield sse({"type": "activity", "event": ev})
 
         if injected:
+            branch_note = ", ".join(read_branches)
             ev = {
                 "kind": "memory_read",
-                "label": f"Recalled {len(injected)} {'fact' if len(injected) == 1 else 'facts'}",
+                "label": f"Recalled {len(injected)} {'fact' if len(injected) == 1 else 'facts'} ({branch_note})",
                 "units": injected,
             }
             activity_log.append(ev)
@@ -168,10 +183,7 @@ async def chat(req: ChatRequest):
             search_query = research.should_search(provider, req.message)
 
         if search_query:
-            # fires immediately so the UI shows activity before the (slower)
-            # fetch+read+distill pipeline finishes
             yield sse({"type": "activity", "event": {"kind": "searching", "label": f"Searching: {search_query}"}})
-
             distilled = research.research(provider, search_query)
             if distilled:
                 ev = {
@@ -181,7 +193,6 @@ async def chat(req: ChatRequest):
                 }
                 activity_log.append(ev)
                 yield sse({"type": "activity", "event": ev})
-
                 conversation.append({
                     "role": "system",
                     "content": research.format_for_context(search_query, distilled),
@@ -198,31 +209,30 @@ async def chat(req: ChatRequest):
             yield sse({"type": "error", "message": str(e)})
             return
 
-        # 'known' (the full database) is still used here for deduplication/conflict checks
-        units = extract_units(provider, req.message, full_response, known)
+        units = extract_units(provider, req.message, full_response, known, allowed_branches)
         added, conflicts = [], []
 
         for u in units:
             short = u.get("supersedes")
-            target = (
-                next((k for k in known if k["hash"].startswith(short)), None)
-                if short else None
-            )
+            target = next((k for k in known if k["hash"].startswith(short)), None) if short else None
+            branch = u.get("branch", "main")
+
             if target:
                 cid = uuid4().hex[:12]
                 PENDING[cid] = {
                     "from": target["hash"],
                     "unit": u,
                     "source": req.conversation_id,
-                    "branch": req.branch,
+                    "branch": target["branch"],  # supersede lands on the target's own branch
                 }
                 conflicts.append({"id": cid, "old": target, "new": u})
                 ledger.log("conflict_raised",
                            f"'{u['content']}' conflicts with '{target['content']}'",
                            req.conversation_id, actor="system")
-            elif commit_unit(u, req.conversation_id, req.branch):
+            elif commit_unit(u, req.conversation_id, branch):
                 added.append(u)
-                ledger.log("memory_commit", f"added: {u['content']}", req.conversation_id, actor="system")
+                ledger.log("memory_commit", f"added to {branch}: {u['content']}",
+                           req.conversation_id, actor="system")
 
         if added:
             ev = {
@@ -244,7 +254,7 @@ async def chat(req: ChatRequest):
             activity_log.append(ev)
             yield sse({"type": "activity", "event": ev})
 
-        save_message(req.conversation_id, req.branch, "assistant", full_response, activity_log)
+        save_message(req.conversation_id, "assistant", full_response, activity_log)
         yield sse({"type": "done"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -269,13 +279,14 @@ def resolve_conflict(req: ResolveRequest):
 
 
 @app.delete("/api/messages/{conversation_id}")
-def clear_messages(conversation_id: str, branch: str = "main"):
+def clear_messages(conversation_id: str):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM messages WHERE conversation_id = ? AND branch = ?", (conversation_id, branch))
+    conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
     conn.commit()
     conn.close()
-    ledger.log("conversation_cleared", f"branch={branch}", conversation_id, actor="user")
-    return {"cleared": conversation_id, "branch": branch}
+    ledger.log("conversation_cleared", "chat history wiped", conversation_id, actor="user")
+    return {"cleared": conversation_id}
+
 
 class MergeApplyRequest(BaseModel):
     from_branch: str
@@ -283,6 +294,7 @@ class MergeApplyRequest(BaseModel):
     adopt: list[str] = []
     replace: list[dict] = []
     summary: str = "manual merge"
+
 
 @app.get("/api/merge/preview")
 def merge_preview(from_branch: str, into_branch: str):

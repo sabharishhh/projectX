@@ -23,9 +23,9 @@
   });
 
   async function loadMessages() {
-    const res = await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}?branch=${encodeURIComponent(branch)}`);
+    const res = await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`);
     messages = await res.json();
-  }
+}
 
   async function loadMemory() {
     try {
@@ -129,7 +129,7 @@
   }
 
   async function clearChat() {
-    await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}?branch=${encodeURIComponent(branch)}`, { method: "DELETE" });
+    await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`, { method: "DELETE" });
     messages = [];
   }
 
