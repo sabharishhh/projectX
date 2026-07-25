@@ -253,17 +253,40 @@ def test_conflict_detection_and_resolution():
     conflict_id = conflicts[0]["id"]
     res = httpx.post(
         f"{BACKEND}/api/memory/resolve",
-        json={"conflict_id": conflict_id, "choice": "update"},
+        json={"conflict_id": conflict_id, "choice": "update", "conversation_id": conv},
         timeout=10.0,
     ).json()
     ok("conflict resolves successfully", res.get("ok") is True)
 
     state = memory_state("main") + memory_state("work") + memory_state("personal")
     has_go = any("go" in u["content"].lower() and "python" not in u["content"].lower() for u in state)
-    has_stale_python_only = any(
-        "python" in u["content"].lower() and "go" not in u["content"].lower() for u in state
-    )
     ok("resolved fact reflects the update (Go), not the stale value", has_go)
+
+    # confirms the resolution actually persisted onto the stored message —
+    # the specific bug the redesign fixed (resolution surviving a reload/restart),
+    # not just that the endpoint returned ok:true in the moment
+    msgs = httpx.get(f"{BACKEND}/api/messages/{conv}").json()
+    resolved_entry = None
+    for m in msgs:
+        for act in m.get("activity", []) or []:
+            if act.get("kind") == "conflict" and act.get("id") == conflict_id:
+                resolved_entry = act
+    ok(
+        "conflict's resolution status is persisted on the stored message, not just the live response",
+        resolved_entry is not None and resolved_entry.get("resolved") == "update",
+        f"found: {resolved_entry}",
+    )
+
+    # the real regression test: reload the same conversation fresh (as a page
+    # refresh would) and confirm the resolved state survives, rather than
+    # reverting to an unresolved/pending conflict
+    msgs_reloaded = httpx.get(f"{BACKEND}/api/messages/{conv}").json()
+    still_resolved = any(
+        act.get("kind") == "conflict" and act.get("id") == conflict_id and act.get("resolved") == "update"
+        for m in msgs_reloaded
+        for act in (m.get("activity") or [])
+    )
+    ok("resolution survives a fresh reload of the conversation", still_resolved)
 
     clear_chat(conv)
 
