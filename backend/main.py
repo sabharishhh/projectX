@@ -293,6 +293,26 @@ def clear_messages(conversation_id: str):
     ledger.log("conversation_cleared", "chat history wiped", conversation_id, actor="user")
     return {"cleared": conversation_id}
 
+@app.get("/api/conversations")
+def list_conversations():
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("""
+        SELECT conversation_id,
+               MIN(created_at) as started,
+               MAX(created_at) as updated,
+               (SELECT content FROM messages m2
+                WHERE m2.conversation_id = m1.conversation_id AND m2.role = 'user'
+                ORDER BY m2.id ASC LIMIT 1) as first_message
+        FROM messages m1
+        GROUP BY conversation_id
+        ORDER BY updated DESC
+    """).fetchall()
+    conn.close()
+    return [
+        {"conversation_id": r[0], "started": r[1], "updated": r[2],
+         "label": (r[3][:60] if r[3] else "New chat")}
+        for r in rows
+    ]
 
 class MergeApplyRequest(BaseModel):
     from_branch: str

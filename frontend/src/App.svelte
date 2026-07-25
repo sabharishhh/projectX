@@ -3,6 +3,7 @@
   import ActivityStrip from "./lib/ActivityStrip.svelte";
   import ConflictBlock from "./lib/ConflictBlock.svelte";
   import MemoryPanel from "./lib/MemoryPanel.svelte";
+  import ConversationSidebar from "./lib/ConversationSidebar.svelte";
   import { renderMarkdown } from "./lib/markdown.js";
 
   const API_BASE = "http://127.0.0.1:8000";
@@ -12,19 +13,26 @@
     return crypto.randomUUID();
   }
 
-  let CONVERSATION_ID = localStorage.getItem("projectx-conversation-id") || newConversationId();
-  localStorage.setItem("projectx-conversation-id", CONVERSATION_ID);
+  function loadInitialConversationId() {
+    const existing = localStorage.getItem("projectx-conversation-id");
+    if (existing) return existing;
+    const fresh = newConversationId();
+    localStorage.setItem("projectx-conversation-id", fresh);
+    return fresh;
+  }
 
+  let CONVERSATION_ID = $state(loadInitialConversationId());
 
   let messages = $state([]);
   let input = $state("");
   let streaming = $state(false);
   let memory = $state([]);
+  let conversations = $state([]);
   let panelOpen = $state(true);
   let scroller;
 
   onMount(async () => {
-    await Promise.all([loadMessages(), loadMemory()]);
+    await Promise.all([loadMessages(), loadMemory(), loadConversations()]);
   });
 
   async function loadMessages() {
@@ -57,13 +65,12 @@
     }
   }
 
-  async function loadBranches() {
+  async function loadConversations() {
     try {
-      const res = await fetch(`${MEMORY_BASE}/branches`);
-      const list = await res.json();
-      branches = list.length ? list : ["main"];
+      const res = await fetch(`${API_BASE}/api/conversations`);
+      conversations = await res.json();
     } catch {
-      branches = ["main"];
+      conversations = [];
     }
   }
 
@@ -71,6 +78,13 @@
     CONVERSATION_ID = newConversationId();
     localStorage.setItem("projectx-conversation-id", CONVERSATION_ID);
     messages = [];
+  }
+
+  async function switchConversation(id) {
+    if (id === CONVERSATION_ID) return;
+    CONVERSATION_ID = id;
+    localStorage.setItem("projectx-conversation-id", CONVERSATION_ID);
+    await loadMessages();
   }
 
   async function resolve(act, choice) {
@@ -128,7 +142,6 @@
             messages[i].content += ev.value;
           } else if (ev.type === "activity") {
             if (ev.event.kind === "search" || ev.event.kind === "search_failed") {
-              // remove the transient "searching…" note once the real result lands
               messages[i].activity = messages[i].activity.filter((a) => a.kind !== "searching");
             }
             messages[i].activity.push({ ...ev.event, open: false });
@@ -142,12 +155,13 @@
       messages[i].error = e.message;
     }
     streaming = false;
-    await loadBranches(); // a new branch may have just been created
+    await loadConversations(); // updates label/ordering, and reveals a brand-new thread once it has its first message
   }
 
   async function clearChat() {
     await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`, { method: "DELETE" });
     messages = [];
+    await loadConversations();
   }
 
   async function clearMemory() {
@@ -190,12 +204,17 @@
   />
 </svelte:head>
 
-<div class="app" style:--cols={panelOpen ? "1fr 300px" : "1fr"}>
+<div class="app" style:--cols={panelOpen ? "220px 1fr 300px" : "220px 1fr"}>
+  <ConversationSidebar
+    {conversations}
+    activeId={CONVERSATION_ID}
+    onNew={startNewChat}
+    onSelect={switchConversation}
+  />
+
   <section class="chat">
     <header>
-      <h1>projectX</h1>
       <div class="actions">
-        <button onclick={startNewChat}>+ new chat</button>
         <button onclick={clearChat}>Clear chat</button>
         <button onclick={clearMemory}>Clear memory</button>
         <button class="toggle" onclick={() => (panelOpen = !panelOpen)}>
@@ -204,7 +223,13 @@
       </div>
     </header>
 
-    <div class="stream" bind:this={scroller} onclick={handleStreamClick} onkeydown={handleStreamKeydown} role="presentation">
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="stream"
+      bind:this={scroller}
+      onclick={handleStreamClick}
+      onkeydown={handleStreamKeydown}
+    >
       {#if messages.length === 0}
         <p class="empty">Say something. What you reveal about yourself gets remembered.</p>
       {/if}
@@ -268,7 +293,7 @@
     --wash: #e2ebe7;
 
     display: grid;
-    grid-template-columns: var(--cols, 1fr 300px);
+    grid-template-columns: var(--cols, 220px 1fr 300px);
     height: 100vh;
     font-family: "Instrument Sans", system-ui, sans-serif;
     color: var(--ink);
@@ -293,16 +318,10 @@
   header {
     display: flex;
     align-items: baseline;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 1rem;
     padding: 0.9rem 1.5rem;
     border-bottom: 1px solid var(--rule);
-  }
-  h1 {
-    margin: 0;
-    font-size: 0.95rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
   }
   .actions {
     display: flex;
@@ -532,14 +551,5 @@
   .send:disabled {
     opacity: 0.45;
     cursor: default;
-  }
-
-  @media (max-width: 820px) {
-    .app {
-      grid-template-columns: 1fr;
-    }
-    .panel-wrap {
-      display: none;
-    }
   }
 </style>
