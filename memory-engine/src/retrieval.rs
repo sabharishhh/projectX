@@ -42,17 +42,23 @@ fn type_priority(unit_type: UnitType, query: &str) -> f64 {
 }
 
 /// Ranks units by relevance to `query`. Highest score first.
-pub fn score(query: &str, units: &[(String, MemoryUnit)]) -> Vec<ScoredUnit> {
+pub fn score(
+    query: &str,
+    units: &[(String, MemoryUnit)],
+    boost: &[UnitType],
+) -> Vec<ScoredUnit> {
     let mut scored: Vec<ScoredUnit> = units
         .iter()
         .map(|(hash, unit)| {
             let relevance = keyword_overlap(query, &unit.content);
             let recency = recency_score(unit.created_at);
             let priority = type_priority(unit.unit_type, query);
+            // an active skill biases retrieval toward the types it cares about
+            let skill_boost = if boost.contains(&unit.unit_type) { 1.4 } else { 1.0 };
             ScoredUnit {
                 hash: hash.clone(),
                 unit: unit.clone(),
-                score: (relevance * 2.0 + recency) * priority,
+                score: (relevance * 2.0 + recency) * priority * skill_boost,
             }
         })
         .collect();

@@ -2,8 +2,8 @@
   let { act } = $props();
 </script>
 
-{#if act.kind === "searching"}
-  <div class="activity searching">{act.label}…</div>
+{#if act.kind === "searching" || act.kind === "skill"}
+  <div class="activity note">{act.label}{act.kind === "searching" ? "…" : ""}</div>
 {:else}
   <div class="activity {act.kind}">
     <button class="act-head" onclick={() => (act.open = !act.open)}>
@@ -40,7 +40,7 @@
     border-radius: 2px;
     background: var(--wash);
   }
-  .activity.searching {
+  .activity.note {
     padding: 0.4rem 0.6rem;
     font-family: "JetBrains Mono", monospace;
     font-size: 0.7rem;

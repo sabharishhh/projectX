@@ -56,18 +56,6 @@ struct ForgetRequest {
     branch: String,
 }
 
-#[derive(Deserialize)]
-struct RetrieveRequest {
-    query: String,
-    #[serde(default = "default_max_units")]
-    max_units: usize,
-    #[serde(default = "default_branch")]
-    branch: String,
-}
-fn default_max_units() -> usize {
-    12
-}
-
 #[derive(Serialize)]
 struct UnitView {
     hash: String,
@@ -116,7 +104,23 @@ struct MergeApplyRequest {
     summary: String,
 }
 
+#[derive(Deserialize)]
+struct RetrieveRequest {
+    query: String,
+    #[serde(default = "default_max_units")]
+    max_units: usize,
+    #[serde(default = "default_branch")]
+    branch: String,
+    #[serde(default)]
+    boost_types: Vec<UnitType>,
+}
+
 type ApiError = (StatusCode, String);
+
+
+fn default_max_units() -> usize {
+    12
+}
 
 fn internal(e: impl std::fmt::Debug) -> ApiError {
     (StatusCode::INTERNAL_SERVER_ERROR, format!("{:?}", e))
@@ -220,7 +224,7 @@ async fn retrieve(
 
     let mut out: Vec<UnitView> = pinned.into_iter().map(|(hash, unit)| UnitView { hash, unit }).collect();
 
-    let scored = memory_engine::retrieval::score(&req.query, &rest);
+    let scored = memory_engine::retrieval::score(&req.query, &rest, &req.boost_types);
     let remaining = req.max_units.saturating_sub(out.len());
     out.extend(scored.into_iter().take(remaining).map(|s| UnitView { hash: s.hash, unit: s.unit }));
 

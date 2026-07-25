@@ -19,13 +19,18 @@ def fetch_state(branch: str = "main") -> list[dict]:
     except Exception:
         return []
 
-def fetch_relevant(query: str, branch: str = "main", max_units: int = 12) -> list[dict]:
+def fetch_relevant(query: str, branch: str = "main", max_units: int = 12, boost_types: list[str] | None = None) -> list[dict]:
     """Scored, budgeted subset for conversation injection.
     Falls back to [] on failure — chat keeps working without memory."""
     try:
         r = httpx.post(
             f"{MEMORY_URL}/retrieve",
-            json={"query": query, "max_units": max_units, "branch": branch},
+            json={
+                "query": query,
+                "max_units": max_units,
+                "branch": branch,
+                "boost_types": boost_types or [],
+            },
             timeout=2.0,
         )
         r.raise_for_status()
@@ -33,8 +38,11 @@ def fetch_relevant(query: str, branch: str = "main", max_units: int = 12) -> lis
     except Exception:
         return []
 
-def build_system_message(units: list[dict]) -> dict:
+def build_system_message(units: list[dict], skill_prompt: str | None = None) -> dict:
     parts = [IDENTITY]
+
+    if skill_prompt:
+        parts.append(skill_prompt)
 
     if units:
         lines = []
