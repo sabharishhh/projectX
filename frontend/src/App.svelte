@@ -1,8 +1,8 @@
 <script>
   import { onMount } from "svelte";
-  import ActivityStrip from "./lib/ActivityStrip.svelte";
-  import ConflictBlock from "./lib/ConflictBlock.svelte";
-  import MemoryPanel from "./lib/MemoryPanel.svelte";
+  import ActivityStrip from "./lib/components/ActivityStrip.svelte";
+  import ConflictBlock from "./lib/components/ConflictBlock.svelte";
+  import MemoryPanel from "./lib/components/MemoryPanel.svelte";
   import ConversationSidebar from "./lib/ConversationSidebar.svelte";
   import { renderMarkdown } from "./lib/markdown.js";
 

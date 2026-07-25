@@ -1,0 +1,34 @@
+@import './tokens.css';
+@import './themes.css';
+
+*, *::before, *::after { box-sizing:border-box; }
+body {
+  margin:0; background:var(--surface-page); color:var(--text-primary);
+  font-family:var(--font-voice); font-size:var(--size-body);
+  line-height:var(--leading-body); font-weight:var(--weight-regular);
+  -webkit-font-smoothing:antialiased;
+}
+code, .technical, time { font-family:var(--font-technical); font-size:var(--size-caption); }
+
+:focus-visible {
+  outline:2px solid var(--accent-memory);
+  outline-offset:2px; border-radius:var(--radius-sm);
+}
+button {
+  font:inherit; cursor:pointer; background:none;
+  border:0.5px solid var(--border-strong); border-radius:var(--radius-sm);
+  padding:var(--space-2) var(--space-3); color:var(--text-primary);
+  transition:background var(--dur-fast) var(--ease-out),
+             transform var(--dur-instant) var(--ease-out);
+}
+button:hover { background:var(--surface-sunken); }
+button:active { transform:scale(.985); }
+
+/* provenance metaphor: ink vs pencil */
+.provenance-stated { color:var(--text-primary); }
+.provenance-inferred {
+  color:var(--text-secondary);
+  text-decoration:underline dotted;
+  text-underline-offset:3px;
+  text-decoration-color:var(--text-muted);
+}
