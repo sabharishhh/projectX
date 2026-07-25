@@ -91,7 +91,7 @@
     const res = await fetch(`${API_BASE}/api/memory/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conflict_id: act.id, choice }),
+      body: JSON.stringify({ conflict_id: act.id, choice, conversation_id: CONVERSATION_ID }),
     });
     const data = await res.json();
     act.resolved = data.ok ? choice : "expired";

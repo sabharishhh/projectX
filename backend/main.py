@@ -95,6 +95,32 @@ def save_message(conversation_id: str, role: str, content: str, activity: list |
     conn.commit()
     conn.close()
 
+def mark_conflict_status(conversation_id: str, conflict_id: str, resolution: str) -> bool:
+    """Find the message that raised this conflict and record how it was
+    resolved, so a reload reflects the true state instead of re-showing it
+    as pending. Returns True if a matching event was found and patched."""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT id, activity FROM messages WHERE conversation_id = ? AND activity IS NOT NULL",
+        (conversation_id,),
+    ).fetchall()
+
+    for row_id, activity_json in rows:
+        events = json.loads(activity_json)
+        changed = False
+        for ev in events:
+            if ev.get("kind") == "conflict" and ev.get("id") == conflict_id:
+                ev["resolved"] = resolution
+                changed = True
+        if changed:
+            conn.execute("UPDATE messages SET activity = ? WHERE id = ?", (json.dumps(events), row_id))
+            conn.commit()
+            conn.close()
+            return True
+
+    conn.close()
+    return False
+
 
 class ChatRequest(BaseModel):
     conversation_id: str
@@ -104,6 +130,7 @@ class ChatRequest(BaseModel):
 class ResolveRequest(BaseModel):
     conflict_id: str
     choice: str  # "update" | "keep_both" | "keep_old"
+    conversation_id: str
 
 
 @app.get("/health")
@@ -269,7 +296,9 @@ def chat(req: ChatRequest):
 @app.post("/api/memory/resolve")
 def resolve_conflict(req: ResolveRequest):
     p = PENDING.pop(req.conflict_id, None)
+
     if not p:
+        mark_conflict_status(req.conversation_id, req.conflict_id, "expired")
         return {"ok": False, "reason": "already resolved or expired"}
 
     if req.choice == "update":
@@ -281,6 +310,7 @@ def resolve_conflict(req: ResolveRequest):
     else:
         ledger.log("conflict_resolved", "kept the original, ignored the new fact", p["source"], actor="user")
 
+    mark_conflict_status(p["source"], req.conflict_id, req.choice)
     return {"ok": True}
 
 
