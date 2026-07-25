@@ -122,7 +122,7 @@ def get_ledger(limit: int = 50):
 
 
 @app.post("/api/chat")
-async def chat(req: ChatRequest):
+def chat(req: ChatRequest):
     history = load_messages(req.conversation_id)
     save_message(req.conversation_id, "user", req.message)
 
@@ -131,7 +131,7 @@ async def chat(req: ChatRequest):
     existing_branches = fetch_branches()
     allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
     domain = branching.infer_domain(provider, req.message, existing_branches)
-    read_branches = ["main"] if domain == "main" else ["main", domain]
+    read_branches = allowed_branches if domain == "main" else ["main", domain]
 
     # aggregate memory across the relevant branches — tagging each unit with
     # its origin so capture can look up which branch a conflict target lives on
