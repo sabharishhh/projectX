@@ -61,7 +61,7 @@ def section(title: str):
 # Low-level helpers
 # ---------------------------------------------------------------------------
 
-def chat(conversation_id: str, message: str, timeout: float = 180.0) -> dict:
+def chat(conversation_id: str, message: str, timeout: float = 200) -> dict:
     """Sends a message, consumes the SSE stream, returns the assembled result:
     {"text": full response, "activity": [event, ...]}."""
     text = ""
