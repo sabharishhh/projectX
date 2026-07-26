@@ -4,7 +4,7 @@ import tomllib
 from pathlib import Path
 
 SKILLS_DIR = Path(__file__).parent / "skills"
-SKILL_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.4-mini")
+from state import CAPTURE_MODEL as SKILL_MODEL
 
 
 def load_skills() -> dict[str, dict]:

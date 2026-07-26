@@ -1,5 +1,6 @@
-import json
 import os
+import json
+from state import CAPTURE_MODEL
 
 FORGET_TRIGGER_WORDS = (
     "forget", "remove", "delete", "erase", "unremember",
@@ -46,7 +47,7 @@ def detect_forget_request(provider, message: str, known: list[dict]) -> list[dic
                 {"role": "system", "content": FORGET_DECISION_PROMPT.format(known=_known_facts_block(known))},
                 {"role": "user", "content": message},
             ],
-            os.getenv("CAPTURE_MODEL", "gpt-5.4-mini"),
+            CAPTURE_MODEL,
         ))
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         matches = []

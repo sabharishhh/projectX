@@ -8,7 +8,7 @@ import search as discovery
 import logging
 
 
-DISTILL_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.4-mini")
+from state import CAPTURE_MODEL as DISTILL_MODEL
 READ_TOP_N = 3  # how many discovered pages actually get fetched + read
 
 SEARCH_DECISION_PROMPT = """Does answering this message require current information

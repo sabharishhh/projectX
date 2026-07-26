@@ -1,5 +1,6 @@
-import json
 import os
+import json
+from state import CAPTURE_MODEL
 
 CANONICAL_DOMAINS = ["work", "personal"]
 
@@ -32,8 +33,8 @@ def infer_domain(provider, message: str, existing_branches: list[str]) -> str:
 
     try:
         raw = "".join(provider.stream(
+            CAPTURE_MODEL,
             [{"role": "system", "content": prompt}, {"role": "user", "content": message}],
-            os.getenv("CAPTURE_MODEL", "gpt-5.4-mini"),
         ))
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         domain = parsed.get("domain", "main")

@@ -2,6 +2,7 @@ import json
 import os
 
 import httpx
+from state import CAPTURE_MODEL
 
 MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 CAPTURE_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.4-mini")
@@ -72,7 +73,7 @@ def extract_units(provider, user_message: str, assistant_message: str,
     try:
         raw = "".join(provider.stream(
             [{"role": "system", "content": prompt}, {"role": "user", "content": exchange}],
-            os.getenv("CAPTURE_MODEL", "gpt-5.4-mini"),
+            CAPTURE_MODEL,
         ))
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         units = parsed.get("units", [])
