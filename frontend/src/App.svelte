@@ -38,7 +38,17 @@
 
   async function loadMessages() {
     const res = await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`);
-    messages = await res.json();
+    const rawMessages = await res.json();
+    
+    // Retroactively scrub orphaned loading states from historical database entries
+    messages = rawMessages.map(msg => {
+      if (msg.activity) {
+        msg.activity = msg.activity.filter(
+          (a) => a.kind !== "searching" && a.kind !== "skill"
+        );
+      }
+      return msg;
+    });
   }
 
   // aggregates across every branch — the user never needs to think about

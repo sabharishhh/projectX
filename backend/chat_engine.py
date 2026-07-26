@@ -183,5 +183,6 @@ def stream_chat(conversation_id: str, message: str):
         yield _sse({"type": "activity", "event": ev})
         ledger.log("forget_requested", f"candidate: {m['unit']['content']}", conversation_id, actor="system")
 
-    save_message(conversation_id, "assistant", full_response, activity_log)
+    persisted_activity = [a for a in activity_log if a["kind"] != "skill"]
+    save_message(conversation_id, "assistant", full_response, persisted_activity)
     yield _sse({"type": "done"})
