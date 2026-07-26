@@ -2,6 +2,7 @@ pub mod commit;
 pub mod retrieval;
 pub mod store;
 pub mod unit;
+mod embedding;
 
 pub use commit::{Commit, UnitChange};
 pub use store::{valid_branch_name, MemoryStore, StoreError};
@@ -11,6 +12,7 @@ pub use unit::{MemoryUnit, Provenance, UnitType};
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use crate::embedding::Embedder;
 
     fn sample() -> MemoryUnit {
         MemoryUnit::new(
@@ -220,6 +222,14 @@ mod tests {
         // state resolution still works fine — history walk never needed
         // to re-fetch the purged unit's content
         assert!(store.current_state("main").unwrap().is_empty());
+    }
+
+    #[test]
+    fn embeds_something() {
+        let e = Embedder::load().unwrap();
+        let v = e.embed_document("test sentence").unwrap();
+        assert_eq!(v.len(), 768); // bge-base-en hidden size
+        assert!((v.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-4); // L2-normalized
     }
 
     #[test]
