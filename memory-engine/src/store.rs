@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -189,6 +190,10 @@ impl MemoryStore {
         self.objects_dir.join(&hash[..2]).join(&hash[2..])
     }
 
+    fn embedding_path(&self, hash: &str) -> PathBuf {
+        self.objects_dir.join(&hash[..2]).join(format!("{}.emb", &hash[2..]))
+    }
+
     /// Permanently removes a unit's content from disk. Safe to call once a
     /// unit is already out of HEAD (superseded) — nothing in state
     /// resolution ever re-fetches a superseded unit's content, only its
@@ -199,6 +204,47 @@ impl MemoryStore {
             fs::remove_file(path)?;
         }
         Ok(())
+    }
+
+    /// Caches a unit's embedding. Call once, at write time (alongside
+    /// `put`) — never needs re-calling for the same hash, since content
+    /// is immutable once hashed.
+    pub fn put_embedding(&self, hash: &str, embedding: &[f32]) -> Result<(), StoreError> {
+        let path = self.embedding_path(hash);
+        fs::create_dir_all(path.parent().unwrap())?;
+        let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+        fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    pub fn get_embedding(&self, hash: &str) -> Result<Option<Vec<f32>>, StoreError> {
+        match fs::read(self.embedding_path(hash)) {
+            Ok(bytes) => Ok(Some(
+                bytes
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                    .collect(),
+            )),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Embeddings for a batch of units, keyed by hash. Units with no cached
+    /// embedding yet (e.g. written before this feature existed) are simply
+    /// absent from the map — retrieval::score treats a missing entry as
+    /// "fall back to BM25 for this unit," never panics on the gap.
+    pub fn embeddings_for(
+        &self,
+        units: &[(String, MemoryUnit)],
+    ) -> Result<HashMap<String, Vec<f32>>, StoreError> {
+        let mut out = HashMap::new();
+        for (hash, _) in units {
+            if let Some(emb) = self.get_embedding(hash)? {
+                out.insert(hash.clone(), emb);
+            }
+        }
+        Ok(out)
     }
 
 }

@@ -2,7 +2,7 @@ pub mod commit;
 pub mod retrieval;
 pub mod store;
 pub mod unit;
-mod embedding;
+pub mod embedding;
 
 pub use commit::{Commit, UnitChange};
 pub use store::{valid_branch_name, MemoryStore, StoreError};

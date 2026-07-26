@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use memory_engine::embedding::Embedder;
 
 use axum::{
     extract::{Query, State},
@@ -12,6 +13,7 @@ use tower_http::cors::CorsLayer;
 
 struct AppState {
     store: MemoryStore,
+    embedder: Embedder,
 }
 
 fn default_branch() -> String {
@@ -164,6 +166,14 @@ async fn remember(
     let unit = MemoryUnit::new(req.content, req.unit_type, req.provenance, req.source.clone());
     let hash = app.store.put(&unit).map_err(internal)?;
 
+    let app2 = app.clone();
+    let content = unit.content.clone();
+    let embedding = tokio::task::spawn_blocking(move || app2.embedder.embed_document(&content))
+        .await
+        .map_err(internal)?
+        .map_err(internal)?;
+    app.store.put_embedding(&hash, &embedding).map_err(internal)?;
+
     let parent = app.store.head(&req.branch).map_err(internal)?;
     app.store
         .commit(&req.branch, &Commit::new(
@@ -184,6 +194,14 @@ async fn supersede(
     check_branch(&req.branch)?;
     let unit = MemoryUnit::new(req.content, req.unit_type, req.provenance, req.source.clone());
     let hash = app.store.put(&unit).map_err(internal)?;
+
+    let app2 = app.clone();
+    let content = unit.content.clone();
+    let embedding = tokio::task::spawn_blocking(move || app2.embedder.embed_document(&content))
+        .await
+        .map_err(internal)?
+        .map_err(internal)?;
+    app.store.put_embedding(&hash, &embedding).map_err(internal)?;
 
     let parent = app.store.head(&req.branch).map_err(internal)?;
     app.store
@@ -229,7 +247,15 @@ async fn retrieve(
 
     let mut out: Vec<UnitView> = pinned.into_iter().map(|(hash, unit)| UnitView { hash, unit }).collect();
 
-    let scored = memory_engine::retrieval::score(&req.query, &rest, &req.boost_types);
+    let app2 = app.clone();
+    let query = req.query.clone();
+    let query_embedding = tokio::task::spawn_blocking(move || app2.embedder.embed_query(&query))
+        .await
+        .map_err(internal)?
+        .map_err(internal)?;
+    let embeddings = app.store.embeddings_for(&rest).map_err(internal)?;
+
+    let scored = memory_engine::retrieval::score(&req.query, &query_embedding, &rest, &embeddings, &req.boost_types);
     let remaining = req.max_units.saturating_sub(out.len());
     out.extend(scored.into_iter().take(remaining).map(|s| UnitView { hash: s.hash, unit: s.unit }));
 
@@ -336,7 +362,8 @@ async fn purge(
 async fn main() {
     let root = std::env::var("MEMORY_ROOT").unwrap_or_else(|_| "./memory-store".to_string());
     let store = MemoryStore::open(&root).expect("failed to open memory store");
-    let app_state = Arc::new(AppState { store });
+    let embedder = Embedder::load().expect("failed to load embedder");
+    let app_state = Arc::new(AppState { store, embedder });
 
     let app = Router::new()
         .route("/health", get(health))
