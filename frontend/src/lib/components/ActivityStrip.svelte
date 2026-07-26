@@ -41,7 +41,12 @@
     </ul>
   </Collapsible>
 {:else}
-  <p class="line" style="--accent:{m.accent}" class:pulsing={act.kind === 'searching'}>
+  <p 
+    class="line" 
+    style="--accent:{m.accent}" 
+    class:pulsing={act.kind === 'searching' || act.kind === 'skill'} 
+    class:completed={act.kind !== 'searching' && act.kind !== 'skill'}
+  >
     <i class="ti {m.icon}" aria-hidden="true"></i>{act.label}
   </p>
 {/if}
@@ -52,8 +57,46 @@
     font-size:var(--size-meta); color:var(--text-secondary);
   }
   .line i { font-size:15px; color:var(--accent); }
-  .pulsing i { animation:breathe 1.6s var(--ease-inout) infinite; }
-  @keyframes breathe { 0%,100% { opacity:.4 } 50% { opacity:1 } }
+  
+  /* Dimmed, italic style for completed actions */
+  .line.completed { 
+    color: var(--text-muted); 
+    font-style: italic; 
+  }
+
+  /* Animated gradient for active searching */
+  .pulsing {
+    background: linear-gradient(
+      90deg,
+      var(--text-muted) 0%,
+      var(--text-muted) 45%,
+      var(--text-primary) 50%, /* Swapped from var(--accent) to bright text color */
+      var(--text-muted) 55%,
+      var(--text-muted) 100%
+    );
+    background-size: 300% 100%;
+    color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: shine 3s linear infinite;
+  }
+
+  .pulsing i { 
+    /* This keeps the icon itself the accent color (blue) */
+    color: var(--accent); 
+    animation: breathe 3s var(--ease-inout) infinite; 
+  }
+
+  @keyframes shine {
+    0% { background-position: 100% center; }
+    100% { background-position: -100% center; }
+  }
+
+  @keyframes breathe { 
+    0%, 100% { opacity: 0.5; } 
+    50% { opacity: 1; } 
+  }
+
   .units, .results { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2); }
   .units li { font-size:var(--size-meta); line-height:var(--leading-tight); }
   .type { display:block; color:var(--text-muted); margin-top:2px; }

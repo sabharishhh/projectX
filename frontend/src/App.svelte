@@ -141,9 +141,16 @@
 
           if (ev.type === "text") {
             messages[i].content += ev.value;
+            // 1. Scrub loading states completely when text starts streaming
+            messages[i].activity = messages[i].activity.filter(
+              (a) => a.kind !== "searching" && a.kind !== "skill"
+            );
           } else if (ev.type === "activity") {
-            if (ev.event.kind === "search" || ev.event.kind === "search_failed") {
-              messages[i].activity = messages[i].activity.filter((a) => a.kind !== "searching");
+            // 2. Scrub loading states completely when ANY concrete result arrives
+            if (["search", "search_failed", "memory_read", "memory_write"].includes(ev.event.kind)) {
+              messages[i].activity = messages[i].activity.filter(
+                (a) => a.kind !== "searching" && a.kind !== "skill"
+              );
             }
             messages[i].activity.push({ ...ev.event, open: false });
             if (ev.event.kind === "memory_write") loadMemory();
@@ -156,7 +163,7 @@
       messages[i].error = e.message;
     }
     streaming = false;
-    await loadConversations(); // updates label/ordering, and reveals a brand-new thread once it has its first message
+    await loadConversations(); 
   }
 
   async function clearChat() {
