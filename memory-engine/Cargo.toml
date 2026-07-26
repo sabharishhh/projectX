@@ -6,9 +6,9 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-candle-core = "0.11.0"
-candle-nn = "0.11.0"
-candle-transformers = "0.11.0"
+candle-core = { version = "0.11", features = ["accelerate"] }
+candle-nn = { version = "0.11", features = ["accelerate"] }
+candle-transformers = { version = "0.11", features = ["accelerate"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 hf-hub = "0.4"
 rust-stemmers = "1.2.0"

@@ -8,13 +8,17 @@ use axum::{
     Json, Router,
 };
 use memory_engine::{valid_branch_name, Commit, MemoryStore, MemoryUnit, Provenance, UnitChange, UnitType};
+use memory_engine::reranker::Reranker;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 struct AppState {
     store: MemoryStore,
     embedder: Embedder,
+    reranker: Reranker,
 }
+
+const RERANK_K: usize = 16;
 
 fn default_branch() -> String {
     "main".to_string()
@@ -256,8 +260,40 @@ async fn retrieve(
     let embeddings = app.store.embeddings_for(&rest).map_err(internal)?;
 
     let scored = memory_engine::retrieval::score(&req.query, &query_embedding, &rest, &embeddings, &req.boost_types);
+    // Cascade: blended score picks the top RERANK_K worth spending the
+    // reranker's real compute on; the reranker then decides final order
+    // within just that set — it doesn't re-filter, only re-ranks.
+    let rerank_candidates: Vec<(String, MemoryUnit)> = scored
+        .into_iter()
+        .take(RERANK_K)
+        .map(|s| (s.hash, s.unit))
+        .collect();
+
+    let app2 = app.clone();
+    let query = req.query.clone();
+    let contents: Vec<String> = rerank_candidates.iter().map(|(_, u)| u.content.clone()).collect();
+    let rerank_scores = tokio::task::spawn_blocking(move || {
+        let refs: Vec<&str> = contents.iter().map(|s| s.as_str()).collect();
+        app2.reranker.rerank(&query, &refs)
+    })
+        .await
+        .map_err(internal)?
+        .map_err(internal)?;
+
+    let mut reranked: Vec<(UnitView, f32)> = rerank_candidates
+        .into_iter()
+        .zip(rerank_scores)
+        .map(|((hash, unit), score)| (UnitView { hash, unit }, score))
+        .collect();
+    reranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    // temporary: expose raw scores to sanity-check the reranker isn't flat
+    for (i, (uv, score)) in reranked.iter().enumerate() {
+        eprintln!("rerank[{i}]: {:.4} — {}", score, uv.unit.content);
+    }
+
     let remaining = req.max_units.saturating_sub(out.len());
-    out.extend(scored.into_iter().take(remaining).map(|s| UnitView { hash: s.hash, unit: s.unit }));
+    out.extend(reranked.into_iter().take(remaining).map(|(uv, _)| uv));
 
     Ok(Json(out))
 }
@@ -363,7 +399,8 @@ async fn main() {
     let root = std::env::var("MEMORY_ROOT").unwrap_or_else(|_| "./memory-store".to_string());
     let store = MemoryStore::open(&root).expect("failed to open memory store");
     let embedder = Embedder::load().expect("failed to load embedder");
-    let app_state = Arc::new(AppState { store, embedder });
+    let reranker = Reranker::load().expect("failed to load reranker");
+    let app_state = Arc::new(AppState { store, embedder, reranker });
 
     let app = Router::new()
         .route("/health", get(health))

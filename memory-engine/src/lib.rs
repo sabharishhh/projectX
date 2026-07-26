@@ -3,6 +3,7 @@ pub mod retrieval;
 pub mod store;
 pub mod unit;
 pub mod embedding;
+pub mod reranker;
 
 pub use commit::{Commit, UnitChange};
 pub use store::{valid_branch_name, MemoryStore, StoreError};
@@ -13,6 +14,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use crate::embedding::Embedder;
+    use crate::reranker::Reranker;
 
     fn sample() -> MemoryUnit {
         MemoryUnit::new(
@@ -230,6 +232,16 @@ mod tests {
         let v = e.embed_document("test sentence").unwrap();
         assert_eq!(v.len(), 768); // bge-base-en hidden size
         assert!((v.iter().map(|x| x * x).sum::<f32>() - 1.0).abs() < 1e-4); // L2-normalized
+    }
+
+    #[test]
+    fn reranks_something() {
+        let r = Reranker::load().unwrap();
+        let scores = r.rerank(
+            "movies directed by Christopher Nolan",
+            &["User is interested in Christopher Nolan movies.", "User likes hiking on weekends."],
+        ).unwrap();
+        assert!(scores[0] > scores[1]); // Nolan fact should clearly outscore the decoy
     }
 
     #[test]
