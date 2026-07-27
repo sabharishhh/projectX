@@ -24,10 +24,15 @@ def init_db():
             summarized_through INTEGER NOT NULL DEFAULT 0
         )
     """)
-    # migrations for dbs created before these columns existed. The `branch`
-    # column is left in place (unused) rather than dropped — conversations
-    # are single-threaded again now that branch inference is per-fact, not
-    # per-conversation, but no need to churn the schema to remove it.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS retrieval_traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            message TEXT NOT NULL,
+            trace TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)")]
     if "activity" not in cols:
         conn.execute("ALTER TABLE messages ADD COLUMN activity TEXT")
@@ -166,3 +171,23 @@ def save_summary(conversation_id: str, summary: str, summarized_through: int):
     )
     conn.commit()
     conn.close()
+
+def save_retrieval_trace(conversation_id: str, message: str, trace: dict):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO retrieval_traces (conversation_id, message, trace, created_at) VALUES (?, ?, ?, ?)",
+        (conversation_id, message, json.dumps(trace), datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_retrieval_traces(conversation_id: str, limit: int = 20) -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT message, trace, created_at FROM retrieval_traces "
+        "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+        (conversation_id, limit),
+    ).fetchall()
+    conn.close()
+    return [{"message": m, "trace": json.loads(t), "created_at": c} for m, t, c in rows]

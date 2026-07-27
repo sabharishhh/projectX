@@ -7,10 +7,10 @@ import branching
 import forgetting
 import summarization
 import skills as skill_registry
+
 from capture import extract_units, commit_unit
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message
-
-from db import load_messages, save_message, to_provider_messages
+from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
 from state import provider, model, PENDING, PENDING_FORGETS
 
 
@@ -40,20 +40,32 @@ def stream_chat(conversation_id: str, message: str):
     known = [{**u, "branch": b} for b in allowed_branches for u in fetch_state(b)]
 
     seen, all_candidates = set(), []
+    per_branch_debug = {}
     for b in allowed_branches:
-        for u in fetch_relevant(
+        results = fetch_relevant(
             message, branch=b, max_units=12,
             boost_types=(skill or {}).get("boost_types"),
-        ):
+        )
+        per_branch_debug[b] = [
+            {"hash": u["hash"][:8], "content": u["content"], "score": u.get("score")}
+            for u in results
+        ]
+        for u in results:
             if u["hash"] not in seen:
                 seen.add(u["hash"])
                 all_candidates.append({**u, "branch": b})
-        # Real cross-branch ranking by score, not branch-alphabetical-order —
-        # this is what let a main-branch fact fill the global cap before a
-        # more relevant fact from another branch was ever considered, even
-        # though that branch's own call had ranked it #1.
-        all_candidates.sort(key=lambda u: u["score"], reverse=True)
-        injected = all_candidates[:12]
+
+    all_candidates.sort(key=lambda u: u["score"], reverse=True)
+    injected = all_candidates[:12]
+
+    save_retrieval_trace(conversation_id, message, {
+        "allowed_branches": allowed_branches,
+        "per_branch": per_branch_debug,
+        "merged_top12": [
+            {"hash": u["hash"][:8], "content": u["content"], "score": u["score"], "branch": u["branch"]}
+            for u in injected
+        ],
+    })
 
     # Windowed history + rolling summary, replacing full unwindowed history.
     # `skill` and `injected` are both resolved by this point.

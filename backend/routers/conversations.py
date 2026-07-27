@@ -26,3 +26,7 @@ def list_conversations():
 @router.get("/api/ledger")
 def get_ledger(limit: int = 50):
     return ledger.recent(limit)
+
+@router.get("/api/retrieval-trace/{conversation_id}")
+def get_retrieval_trace(conversation_id: str, limit: int = 20):
+    return db.get_retrieval_traces(conversation_id, limit)

@@ -1,7 +1,12 @@
 import os
+import logging
 import httpx
 
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+logger = logging.getLogger("memory")
+
 MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
+REQUEST_TIMEOUT = 20.0  # covers a cold/paged-out model load (~15s observed), not just a warm call
 
 IDENTITY = (
     "You are projectX, a personal AI assistant. You are not ChatGPT, Claude, "
@@ -10,40 +15,34 @@ IDENTITY = (
 )
 
 def fetch_state(branch: str = "main") -> list[dict]:
-    """Current memory units. Returns [] if the engine is unreachable —
-    chat should still work without memory."""
     try:
-        r = httpx.get(f"{MEMORY_URL}/state", params={"branch": branch}, timeout=2.0)
+        r = httpx.get(f"{MEMORY_URL}/state", params={"branch": branch}, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
         return r.json()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_state failed for branch={branch!r}: {e!r}")
         return []
 
 def fetch_relevant(query: str, branch: str = "main", max_units: int = 12, boost_types: list[str] | None = None) -> list[dict]:
-    """Scored, budgeted subset for conversation injection.
-    Falls back to [] on failure — chat keeps working without memory."""
     try:
         r = httpx.post(
             f"{MEMORY_URL}/retrieve",
-            json={
-                "query": query,
-                "max_units": max_units,
-                "branch": branch,
-                "boost_types": boost_types or [],
-            },
-            timeout=2.0,
+            json={"query": query, "max_units": max_units, "branch": branch, "boost_types": boost_types or []},
+            timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
         return r.json()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_relevant failed for branch={branch!r}: {e!r}")
         return []
 
 def fetch_branches() -> list[str]:
     try:
-        r = httpx.get(f"{MEMORY_URL}/branches", timeout=2.0)
+        r = httpx.get(f"{MEMORY_URL}/branches", timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
         return r.json()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"fetch_branches failed: {e!r}")
         return []
 
 def build_system_message(units: list[dict], skill_prompt: str | None = None) -> dict:

@@ -1,11 +1,16 @@
 import json
 import os
+import logging
 
 import httpx
 from state import CAPTURE_MODEL
 
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+logger = logging.getLogger("capture")
+
 MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 CAPTURE_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.4-mini")
+REQUEST_TIMEOUT = 20.0  # matches memory.py — covers a cold/paged-out engine load
 
 CAPTURE_PROMPT = """You extract durable facts about the user from a conversation turn.
 
@@ -97,11 +102,12 @@ def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
                 "summary": unit.get("summary", unit["content"]),
                 "branch": branch,
             },
-            timeout=3.0,
+            timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"commit_unit failed for {unit.get('content', '')!r}: {e!r}")
         return False
 
 
@@ -124,11 +130,12 @@ def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main"
                 "summary": unit.get("summary", unit["content"]),
                 "branch": branch,
             },
-            timeout=3.0,
+            timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"supersede_unit failed for {from_hash!r}: {e!r}")
         return False
 
 def forget_unit(unit_hash: str, source: str, branch: str, summary: str) -> bool:
@@ -137,11 +144,12 @@ def forget_unit(unit_hash: str, source: str, branch: str, summary: str) -> bool:
         r = httpx.post(
             f"{MEMORY_URL}/forget",
             json={"hash": unit_hash, "source": source, "summary": summary, "branch": branch},
-            timeout=3.0,
+            timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"forget_unit failed for {unit_hash!r}: {e!r}")
         return False
 
 
@@ -149,8 +157,9 @@ def purge_unit(unit_hash: str) -> bool:
     """Hard-delete: the unit's content is genuinely removed from disk.
     Callers must have already soft-forgotten the unit first."""
     try:
-        r = httpx.post(f"{MEMORY_URL}/purge", json={"hash": unit_hash}, timeout=3.0)
+        r = httpx.post(f"{MEMORY_URL}/purge", json={"hash": unit_hash}, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"purge_unit failed for {unit_hash!r}: {e!r}")
         return False
