@@ -86,7 +86,8 @@ def extract_units(provider, user_message: str, assistant_message: str,
             if u.get("branch") not in branches:
                 u["branch"] = "main"
         return units
-    except Exception:
+    except Exception as e:
+        logger.warning(f"extract_units failed to parse: {e!r}")
         return []
 
 

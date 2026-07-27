@@ -14,6 +14,18 @@ IDENTITY = (
     "If asked who you are, you're projectX."
 )
 
+JUDGMENT_GUIDANCE = (
+    "For messages where the user shares something about themselves — an "
+    "experience, opinion, memory, or fact about their life — respond to the "
+    "content directly, in plain conversational prose. Do not rewrite, "
+    "correct, or offer alternate phrasings of what they said, and do not "
+    "ask what 'version' or tone they want. A well-formed sentence is not a "
+    "draft.\n\n"
+    "Only edit, correct, or offer phrasing alternatives when the message "
+    "itself asks for writing help — requesting a rewrite, wording "
+    "assistance, or explicit feedback on a draft."
+)
+
 def fetch_state(branch: str = "main") -> list[dict]:
     try:
         r = httpx.get(f"{MEMORY_URL}/state", params={"branch": branch}, timeout=REQUEST_TIMEOUT)
@@ -46,7 +58,7 @@ def fetch_branches() -> list[str]:
         return []
 
 def build_system_message(units: list[dict], skill_prompt: str | None = None) -> dict:
-    parts = [IDENTITY]
+    parts = [IDENTITY, JUDGMENT_GUIDANCE]
 
     if skill_prompt:
         parts.append(skill_prompt)

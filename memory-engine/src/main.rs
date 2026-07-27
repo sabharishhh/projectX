@@ -297,10 +297,16 @@ async fn retrieve(
         .collect();
     reranked.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
 
+    // Unvalidated starting guess: relevant facts have scored 0.15–0.59 in
+    // testing so far; clearly irrelevant ones 0.0001–0.03. Needs real tuning
+    // against broader usage, same as MIN_BM25_SCORE/MIN_DENSE_SCORE before it.
+    const MIN_RERANK_SCORE: f32 = 0.1;
+
     let remaining = req.max_units.saturating_sub(out.len());
     out.extend(
         reranked
             .into_iter()
+            .filter(|(_, _, score)| *score >= MIN_RERANK_SCORE)
             .take(remaining)
             .map(|(hash, unit, score)| RetrievedUnitView { hash, unit, score: score as f64 }),
     );

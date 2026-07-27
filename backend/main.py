@@ -2,7 +2,6 @@ import ledger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from memory import MEMORY_URL
 import db
 from state import provider, model  # noqa: F401 — importing triggers get_provider() once, correctly ordered after load_dotenv() inside state.py
 from routers import chat, conversations, memory, merge

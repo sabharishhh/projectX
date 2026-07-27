@@ -7,6 +7,9 @@ import search as discovery
 
 import logging
 
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+logger = logging.getLogger("research")
+
 
 from state import CAPTURE_MODEL as DISTILL_MODEL
 READ_TOP_N = 3  # how many discovered pages actually get fetched + read
@@ -47,20 +50,22 @@ def should_search(provider, message: str) -> str | None:
         raw = _call(provider, SEARCH_DECISION_PROMPT, message)
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         return parsed.get("query") if parsed.get("search") else None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"should_search failed to parse: {e!r}")
         return None
 
 
 def _read_and_distill(provider, query: str, result: dict) -> dict | None:
     page = extraction.extract_page(result["url"])
-    logging.getLogger("extraction").info(f"extraction result for {result['url']}: method={page['method']}")
+    logger.info(f"extraction result for {result['url']}: method={page['method']}")
     if not page["text"]:
         return None
 
-    text = page["text"][:6000]  # cap input so distillation stays cheap
+    text = page["text"][:6000]
     try:
         summary = _call(provider, DISTILL_PROMPT.format(query=query, page_text=text), "Summarize.")
-    except Exception:
+    except Exception as e:
+        logger.warning(f"distill failed for {result['url']}: {e!r}")
         return None
 
     if "nothing relevant" in summary.lower():

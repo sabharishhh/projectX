@@ -3,7 +3,7 @@ import queue
 import threading
 import time
 from typing import Iterator
-
+import json
 import httpx
 from openai import OpenAI
 from .base import Provider
@@ -28,7 +28,14 @@ class OpenAIProvider(Provider):
 
     def _run(self, messages: list[dict], model: str, out: queue.Queue):
         try:
-            stream = self.client.responses.create(model=model, input=messages, stream=True)
+            stream = self.client.responses.create(
+                model=model,
+                input=messages,
+                stream=True,
+                reasoning={
+                    "effort": "low"
+                    },
+            )
             for event in stream:
                 if event.type == "response.output_text.delta":
                     out.put(("chunk", event.delta))
@@ -74,3 +81,20 @@ class OpenAIProvider(Provider):
                 if yielded_anything or attempt == MAX_ATTEMPTS:
                     raise
                 logger.info("retrying after transient failure...")
+
+    def complete_json(self, messages: list[dict], model: str, schema: dict, schema_name: str) -> dict:
+        response = self.client.responses.create(
+            model=model,
+            input=messages,
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
+        )
+        # strict:true guarantees valid, schema-conforming JSON — no markdown-fence
+        # stripping or try/except parsing needed, unlike the old stream()-based path.
+        return json.loads(response.output_text)
