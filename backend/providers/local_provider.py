@@ -37,7 +37,11 @@ class LocalProvider(Provider):
         except Exception as e:
             out.put(("error", e))
 
-    def stream(self, messages: list[dict], model: str) -> Iterator[str]:
+    def stream(self, messages: list[dict], model: str, reasoning_effort: str = "none") -> Iterator[str]:
+        # reasoning_effort accepted for interface compatibility, currently
+        # unused — the standard /v1/chat/completions shape most local
+        # servers expose has no equivalent parameter. Wiring this properly
+        # would depend on which local server/model is actually running.
         logger.info(f"local call started (model={model}, {len(messages)} msgs)")
         q: queue.Queue = queue.Queue()
         t = threading.Thread(target=self._run, args=(messages, model, q), daemon=True)

@@ -7,6 +7,11 @@ from providers import get_provider
 
 provider, model = get_provider()
 
+# Reasoning effort for the main chat reply specifically — background calls
+# (capture, forget-detection, skill-select, search-decision) intentionally
+# stay at stream()'s "none" default; only this one call site opts in.
+MAIN_REASONING_EFFORT = os.getenv("REASONING_EFFORT", "low")
+
 # The model used for cheap background calls (skill selection, capture,
 # domain classification, forget-detection, search-decision, distillation).
 # Under local mode there's no universal cheap fallback that would exist on

@@ -6,12 +6,13 @@ import research
 import branching
 import forgetting
 import summarization
+import agentic_search
 import skills as skill_registry
 
 from capture import extract_units, commit_unit
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message
 from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
-from state import provider, model, PENDING, PENDING_FORGETS
+from state import provider, model, PENDING, PENDING_FORGETS, MAIN_REASONING_EFFORT
 
 
 def _sse(payload: dict) -> str:
@@ -97,42 +98,65 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
-    search_query = None
-    if skill_registry.allows(skill, "web_search"):
-        search_query = research.should_search(provider, message)
-
-    if search_query:
-        yield _sse({"type": "activity", "event": {"kind": "searching", "label": f"Searching: {search_query}"}})
-        distilled = research.research(provider, search_query)
-        if distilled:
-            ev = {
-                "kind": "search",
-                "label": f"Read {len(distilled)} page{'s' if len(distilled) != 1 else ''}: {search_query}",
-                "results": distilled,
-            }
-            activity_log.append(ev)
-            yield _sse({"type": "activity", "event": ev})
-            conversation.append({
-                "role": "system",
-                "content": research.format_for_context(search_query, distilled),
-            })
-            ledger.log("search_call", f"{search_query} ({len(distilled)} pages read)",
-                       conversation_id, actor="system")
-        else:
-            ev = {"kind": "search_failed", "label": f"Searched, but couldn't read any results: {search_query}"}
-            activity_log.append(ev)
-            yield _sse({"type": "activity", "event": ev})
-            ledger.log("search_call", f"{search_query} (0 pages read — extraction failed)",
-                       conversation_id, actor="system")
+    # research-skill turns on a tool-calling-capable provider get the agentic
+    # web_search/web_fetch loop (agentic_search.py, via the local MCP server).
+    # Everything else — other skills, no skill, or a provider without tool
+    # support (e.g. local models) — keeps the original fixed pipeline below.
+    use_agentic = (
+        skill and skill["name"] == "research"
+        and skill_registry.allows(skill, "web_fetch")
+        and provider.supports_tools
+    )
 
     full_response = ""
-    try:
-        for chunk in provider.stream(conversation, model):
-            full_response += chunk
-            yield _sse({"type": "text", "value": chunk})
-    except Exception as e:
-        yield _sse({"type": "error", "message": str(e)})
-        return
+
+    if use_agentic:
+        try:
+            for event in agentic_search.run(provider, model, conversation, reasoning_effort=MAIN_REASONING_EFFORT):
+                if event["type"] == "text":
+                    full_response += event["value"]
+                yield _sse(event)
+                if event["type"] == "activity":
+                    activity_log.append(event["event"])
+        except Exception as e:
+            yield _sse({"type": "error", "message": str(e)})
+            return
+    else:
+        search_query = None
+        if skill_registry.allows(skill, "web_search"):
+            search_query = research.should_search(provider, message)
+
+        if search_query:
+            yield _sse({"type": "activity", "event": {"kind": "searching", "label": f"Searching: {search_query}"}})
+            distilled = research.research(provider, search_query)
+            if distilled:
+                ev = {
+                    "kind": "search",
+                    "label": f"Read {len(distilled)} page{'s' if len(distilled) != 1 else ''}: {search_query}",
+                    "results": distilled,
+                }
+                activity_log.append(ev)
+                yield _sse({"type": "activity", "event": ev})
+                conversation.append({
+                    "role": "system",
+                    "content": research.format_for_context(search_query, distilled),
+                })
+                ledger.log("search_call", f"{search_query} ({len(distilled)} pages read)",
+                           conversation_id, actor="system")
+            else:
+                ev = {"kind": "search_failed", "label": f"Searched, but couldn't read any results: {search_query}"}
+                activity_log.append(ev)
+                yield _sse({"type": "activity", "event": ev})
+                ledger.log("search_call", f"{search_query} (0 pages read — extraction failed)",
+                           conversation_id, actor="system")
+
+        try:
+            for chunk in provider.stream(conversation, model, reasoning_effort=MAIN_REASONING_EFFORT):
+                full_response += chunk
+                yield _sse({"type": "text", "value": chunk})
+        except Exception as e:
+            yield _sse({"type": "error", "message": str(e)})
+            return
 
     units = extract_units(provider, message, full_response, known, allowed_branches)
     added, conflicts = [], []

@@ -416,6 +416,11 @@ async fn main() {
     let store = MemoryStore::open(&root).expect("failed to open memory store");
     let embedder = Embedder::load().expect("failed to load embedder");
     let reranker = Reranker::load().expect("failed to load reranker");
+
+    let _ = embedder.embed_query("warmup").expect("embedder warmup failed");
+    let _ = reranker.rerank("warmup", &["warmup document"]).expect("reranker warmup failed");
+
+    
     let app_state = Arc::new(AppState { store, embedder, reranker });
 
     let app = Router::new()
