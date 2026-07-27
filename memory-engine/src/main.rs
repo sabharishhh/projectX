@@ -19,6 +19,7 @@ struct AppState {
 }
 
 const DENSE_POOL_K: usize = 50;
+const PINNED_SENTINEL_SCORE: f64 = 1000.0;
 
 fn default_branch() -> String {
     "main".to_string()
@@ -124,6 +125,14 @@ struct RetrieveRequest {
 #[derive(Deserialize)]
 struct PurgeRequest {
     hash: String,
+}
+
+#[derive(Serialize)]
+struct RetrievedUnitView {
+    hash: String,
+    #[serde(flatten)]
+    unit: MemoryUnit,
+    score: f64,
 }
 
 type ApiError = (StatusCode, String);
@@ -241,7 +250,7 @@ async fn forget(
 async fn retrieve(
     State(app): State<Arc<AppState>>,
     Json(req): Json<RetrieveRequest>,
-) -> Result<Json<Vec<UnitView>>, ApiError> {
+) -> Result<Json<Vec<RetrievedUnitView>>, ApiError> {
     check_branch(&req.branch)?;
     let units = app.store.current_state(&req.branch).map_err(internal)?;
 
@@ -249,7 +258,10 @@ async fn retrieve(
         matches!(u.unit_type, UnitType::Identity | UnitType::Preference)
     });
 
-    let mut out: Vec<UnitView> = pinned.into_iter().map(|(hash, unit)| UnitView { hash, unit }).collect();
+    let mut out: Vec<RetrievedUnitView> = pinned
+        .into_iter()
+        .map(|(hash, unit)| RetrievedUnitView { hash, unit, score: PINNED_SENTINEL_SCORE })
+        .collect();
 
     let app2 = app.clone();
     let query = req.query.clone();
@@ -261,9 +273,6 @@ async fn retrieve(
 
     let scored = memory_engine::retrieval::score(&req.query, &query_embedding, rest, &embeddings, &req.boost_types);
 
-    // Cascade: blended score picks the top RERANK_K worth spending the
-    // reranker's real compute on; the reranker then decides final order
-    // within just that set — it doesn't re-filter, only re-ranks.
     let rerank_candidates: Vec<(String, MemoryUnit)> = scored
         .into_iter()
         .take(DENSE_POOL_K)
@@ -281,15 +290,20 @@ async fn retrieve(
         .map_err(internal)?
         .map_err(internal)?;
 
-    let mut reranked: Vec<(UnitView, f32)> = rerank_candidates
+    let mut reranked: Vec<(String, MemoryUnit, f32)> = rerank_candidates
         .into_iter()
         .zip(rerank_scores)
-        .map(|((hash, unit), score)| (UnitView { hash, unit }, score))
+        .map(|((hash, unit), score)| (hash, unit, score))
         .collect();
-    reranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    reranked.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
 
     let remaining = req.max_units.saturating_sub(out.len());
-    out.extend(reranked.into_iter().take(remaining).map(|(uv, _)| uv));
+    out.extend(
+        reranked
+            .into_iter()
+            .take(remaining)
+            .map(|(hash, unit, score)| RetrievedUnitView { hash, unit, score: score as f64 }),
+    );
 
     Ok(Json(out))
 }

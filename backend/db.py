@@ -17,6 +17,13 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS conversation_summaries (
+            conversation_id TEXT PRIMARY KEY,
+            summary TEXT NOT NULL,
+            summarized_through INTEGER NOT NULL DEFAULT 0
+        )
+    """)
     # migrations for dbs created before these columns existed. The `branch`
     # column is left in place (unused) rather than dropped — conversations
     # are single-threaded again now that branch inference is per-fact, not
@@ -137,3 +144,25 @@ def mark_forget_status(conversation_id: str, forget_id: str, resolution: str) ->
     conn.commit()
     conn.close()
     return True
+
+def get_summary(conversation_id: str) -> dict | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT summary, summarized_through FROM conversation_summaries WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"summary": row[0], "summarized_through": row[1]}
+
+def save_summary(conversation_id: str, summary: str, summarized_through: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """INSERT INTO conversation_summaries (conversation_id, summary, summarized_through)
+           VALUES (?, ?, ?)
+           ON CONFLICT(conversation_id) DO UPDATE SET summary = ?, summarized_through = ?""",
+        (conversation_id, summary, summarized_through, summary, summarized_through),
+    )
+    conn.commit()
+    conn.close()

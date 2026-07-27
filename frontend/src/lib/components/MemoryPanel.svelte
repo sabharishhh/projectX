@@ -2,7 +2,7 @@
   import Collapsible from './Collapsible.svelte';
   import { reveal } from '$lib/motion.js';
 
-  let { memory = [], onopensource = () => {} } = $props();
+  let { memory = [], onopensource = () => {}, onToggle } = $props();
 
   const ORDER = ['identity', 'preference', 'project', 'decision', 'relationship'];
   const grouped = $derived(
@@ -12,6 +12,16 @@
 </script>
 
 <div class="panel">
+  <div class="panel-header">
+    <div class="brand">Memory</div>
+    <button class="icon-btn" onclick={onToggle} title="Close memory panel" aria-label="Close memory panel">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="15" y1="3" x2="15" y2="21"></line>
+      </svg>
+    </button>
+  </div>
+
   {#if grouped.length === 0}
     <p class="empty">Nothing remembered yet.</p>
   {/if}
@@ -46,6 +56,46 @@
 
 <style>
   .panel { display:flex; flex-direction:column; }
+  
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: var(--space-3);
+    margin-bottom: var(--space-3);
+    border-bottom: 0.5px solid var(--border-hairline);
+  }
+  
+  .brand {
+    font-weight: 600;
+    font-size: 0.95rem;
+    letter-spacing: -0.01em;
+  }
+  
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  
+  .icon-btn svg {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex-shrink: 0;
+  }
+  
+  .icon-btn:hover {
+    background: var(--surface-sunken);
+    color: var(--text-primary);
+  }
 
   .group + .group {
     margin-top:var(--space-3);

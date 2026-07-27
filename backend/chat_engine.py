@@ -1,10 +1,11 @@
 import json
 from uuid import uuid4
 
-import branching
-import forgetting
 import ledger
 import research
+import branching
+import forgetting
+import summarization
 import skills as skill_registry
 from capture import extract_units, commit_unit
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message
@@ -38,7 +39,7 @@ def stream_chat(conversation_id: str, message: str):
     # worth injecting, instead of a folder-like filter deciding it first.
     known = [{**u, "branch": b} for b in allowed_branches for u in fetch_state(b)]
 
-    seen, injected = set(), []
+    seen, all_candidates = set(), []
     for b in allowed_branches:
         for u in fetch_relevant(
             message, branch=b, max_units=12,
@@ -46,11 +47,22 @@ def stream_chat(conversation_id: str, message: str):
         ):
             if u["hash"] not in seen:
                 seen.add(u["hash"])
-                injected.append({**u, "branch": b})
-    injected = injected[:12]
+                all_candidates.append({**u, "branch": b})
+        # Real cross-branch ranking by score, not branch-alphabetical-order —
+        # this is what let a main-branch fact fill the global cap before a
+        # more relevant fact from another branch was ever considered, even
+        # though that branch's own call had ranked it #1.
+        all_candidates.sort(key=lambda u: u["score"], reverse=True)
+        injected = all_candidates[:12]
+
+    # Windowed history + rolling summary, replacing full unwindowed history.
+    # `skill` and `injected` are both resolved by this point.
+    visible_history = history[-summarization.WINDOW_MESSAGES:]
+    summary = summarization.get_current_summary(conversation_id)
 
     conversation = [build_system_message(injected, (skill or {}).get("system_prompt"))] \
-        + to_provider_messages(history) \
+        + ([{"role": "system", "content": f"Summary of earlier conversation:\n{summary}"}] if summary else []) \
+        + to_provider_messages(visible_history) \
         + [{"role": "user", "content": message}]
 
     ledger.log("provider_call", f"model={model}", conversation_id, actor="user")
@@ -185,4 +197,13 @@ def stream_chat(conversation_id: str, message: str):
 
     persisted_activity = [a for a in activity_log if a["kind"] != "skill"]
     save_message(conversation_id, "assistant", full_response, persisted_activity)
+
+    # Fold aged-out messages into the rolling summary, now that this turn's
+    # user message and full reply both exist. No-ops cheaply unless enough
+    # new messages have crossed the visible-window boundary.
+    summarization.maybe_update_summary(
+        provider, conversation_id,
+        history + [{"role": "user", "content": message}, {"role": "assistant", "content": full_response}],
+    )
+
     yield _sse({"type": "done"})

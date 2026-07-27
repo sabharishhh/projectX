@@ -1,5 +1,8 @@
 <script>
   import { onMount } from "svelte";
+  import { slide } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
+  
   import ActivityStrip from "./lib/components/ActivityStrip.svelte";
   import ConflictBlock from "./lib/components/ConflictBlock.svelte";
   import MemoryPanel from "./lib/components/MemoryPanel.svelte";
@@ -29,6 +32,9 @@
   let streaming = $state(false);
   let memory = $state([]);
   let conversations = $state([]);
+  
+  // UI States
+  let sidebarOpen = $state(true);
   let panelOpen = $state(true);
   let scroller;
 
@@ -40,7 +46,6 @@
     const res = await fetch(`${API_BASE}/api/messages/${CONVERSATION_ID}`);
     const rawMessages = await res.json();
     
-    // Retroactively scrub orphaned loading states from historical database entries
     messages = rawMessages.map(msg => {
       if (msg.activity) {
         msg.activity = msg.activity.filter(
@@ -51,8 +56,6 @@
     });
   }
 
-  // aggregates across every branch — the user never needs to think about
-  // branches existing at all; this is just "everything I know about you"
   async function loadMemory() {
     try {
       const branchesRes = await fetch(`${MEMORY_BASE}/branches`);
@@ -109,7 +112,6 @@
     if (data.ok) await loadMemory();
   }
 
-  // keep the latest message in view as tokens arrive
   $effect(() => {
     messages.length;
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
@@ -151,12 +153,10 @@
 
           if (ev.type === "text") {
             messages[i].content += ev.value;
-            // 1. Scrub loading states completely when text starts streaming
             messages[i].activity = messages[i].activity.filter(
               (a) => a.kind !== "searching" && a.kind !== "skill"
             );
           } else if (ev.type === "activity") {
-            // 2. Scrub loading states completely when ANY concrete result arrives
             if (["search", "search_failed", "memory_read", "memory_write"].includes(ev.event.kind)) {
               messages[i].activity = messages[i].activity.filter(
                 (a) => a.kind !== "searching" && a.kind !== "skill"
@@ -190,8 +190,6 @@
   async function deleteConversation(id) {
     await fetch(`${API_BASE}/api/messages/${id}`, { method: "DELETE" });
     if (id === CONVERSATION_ID) {
-      // deleting the active thread — start a fresh one so there's
-      // never a dangling reference to a conversation that no longer exists
       await startNewChat();
     }
     await loadConversations();
@@ -243,23 +241,46 @@
   />
 </svelte:head>
 
-<div class="app" style:--cols={panelOpen ? "220px 1fr 300px" : "220px 1fr"}>
-  <ConversationSidebar
-    {conversations}
-    activeId={CONVERSATION_ID}
-    onNew={startNewChat}
-    onSelect={switchConversation}
-    onDelete={deleteConversation}
-  />
+<div class="app">
+  {#if sidebarOpen}
+    <div class="sidebar-wrap" transition:slide={{ axis: 'x', duration: 300, easing: cubicOut }}>
+      <div class="sidebar-inner">
+        <ConversationSidebar
+          {conversations}
+          activeId={CONVERSATION_ID}
+          onNew={startNewChat}
+          onSelect={switchConversation}
+          onDelete={deleteConversation}
+          onToggle={() => (sidebarOpen = false)} 
+        />
+      </div>
+    </div>
+  {/if}
 
   <section class="chat">
     <header>
+      <div class="left-actions">
+        {#if !sidebarOpen}
+          <button class="icon-btn" onclick={() => (sidebarOpen = true)} title="Open sidebar">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="9" y1="3" x2="9" y2="21"></line>
+            </svg>
+          </button>
+        {/if}
+      </div>
+      
       <div class="actions">
-        <button onclick={clearChat}>Clear chat</button>
-        <button onclick={clearMemory}>Clear memory</button>
-        <button class="toggle" onclick={() => (panelOpen = !panelOpen)}>
-          {panelOpen ? "Hide memory" : "Show memory"}
-        </button>
+        <button onclick={clearChat} class="text-btn">Clear chat</button>
+        <button onclick={clearMemory} class="text-btn">Clear memory</button>
+        {#if !panelOpen}
+          <button class="icon-btn" onclick={() => (panelOpen = true)} title="Open memory">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="15" y1="3" x2="15" y2="21"></line>
+            </svg>
+          </button>
+        {/if}
       </div>
     </header>
 
@@ -314,8 +335,10 @@
   </section>
 
   {#if panelOpen}
-    <div class="panel-wrap">
-      <MemoryPanel {memory} />
+    <div class="panel-wrap" transition:slide={{ axis: 'x', duration: 300, easing: cubicOut }}>
+      <div class="panel-inner">
+        <MemoryPanel {memory} onToggle={() => (panelOpen = false)} />
+      </div>
     </div>
   {/if}
 </div>
@@ -323,7 +346,7 @@
 <style>
   .app {
     display: grid;
-    grid-template-columns: var(--cols, 220px 1fr 300px);
+    grid-template-columns: auto 1fr auto; 
     height: 100vh;
     font-family: var(--font-voice);
     color: var(--text-primary);
@@ -334,35 +357,59 @@
     background-size: 26px 26px;
   }
 
+  /* Grid Column Locks */
+  .sidebar-wrap {
+    grid-column: 1;
+    height: 100%;
+    overflow: hidden;
+  }
+  
+  .panel-wrap {
+    grid-column: 3;
+    height: 100%;
+    overflow: hidden;
+  }
+
   .chat {
+    grid-column: 2; /* Forces the chat to always span the middle column */
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
   }
 
-  .panel-wrap {
+  .sidebar-inner {
+    width: 220px;
+    height: 100%;
+  }
+
+  .panel-inner {
+    width: 300px;
+    height: 100%;
     min-height: 0;
     overflow-y: auto;
     padding: var(--space-4);
     border-left: 0.5px solid var(--border-hairline);
     background: var(--surface-veil);
+    box-sizing: border-box;
   }
 
   header {
     display: flex;
-    align-items: baseline;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: space-between;
     gap: 1rem;
     padding: 0.9rem 1.5rem;
     border-bottom: 0.5px solid var(--border-hairline);
   }
-  .actions {
+
+  .actions, .left-actions {
     display: flex;
     align-items: center;
     gap: 0.4rem;
   }
-  .actions button {
+
+  .text-btn {
     font-family: var(--font-technical);
     font-size: 0.68rem;
     letter-spacing: 0.03em;
@@ -373,7 +420,33 @@
     padding: 0.3rem 0.55rem;
     cursor: pointer;
   }
-  .actions button:hover {
+
+  .text-btn:hover {
+    color: var(--accent-memory);
+    border-color: var(--accent-memory);
+  }
+
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0; 
+    background: none;
+    border: 0.5px solid var(--border-hairline);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  
+  .icon-btn svg {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex-shrink: 0;
+  }
+  
+  .icon-btn:hover {
     color: var(--accent-memory);
     border-color: var(--accent-memory);
   }
@@ -384,7 +457,14 @@
     padding: 2rem 1.5rem;
     display: flex;
     flex-direction: column;
+    align-items: center; /* Centers the conversation flow */
     gap: 1.6rem;
+  }
+
+  /* Shared wrapper for centering the conversation */
+  .turn {
+    width: 100%;
+    max-width: 48rem;
   }
 
   .turn.user {
@@ -402,9 +482,6 @@
     white-space: pre-wrap;
   }
 
-  .turn.assistant {
-    max-width: 42rem;
-  }
   .prose {
     font-size: 0.98rem;
     line-height: 1.65;
@@ -477,8 +554,6 @@
     border-radius: var(--radius-sm);
   }
 
-  /* code blocks stay a fixed dark "editor" look regardless of app theme —
-     deliberate, not a token migration gap */
   .prose :global(.code-block) {
     margin: 0.8rem 0;
     border-radius: 6px;
@@ -550,6 +625,7 @@
 
   .composer {
     display: flex;
+    justify-content: center; /* Aligns input with the centered conversation flow */
     gap: 0.5rem;
     align-items: flex-end;
     padding: 1rem 1.5rem 1.4rem;
@@ -557,6 +633,7 @@
   }
   textarea {
     flex: 1;
+    max-width: 48rem; /* Matches the chat stream width */
     resize: none;
     font: inherit;
     font-size: 0.95rem;
