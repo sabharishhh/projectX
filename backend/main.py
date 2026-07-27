@@ -1,3 +1,5 @@
+import os
+
 import ledger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +8,8 @@ import db
 import extraction
 from state import provider, model  # noqa: F401 — importing triggers get_provider() once, correctly ordered after load_dotenv() inside state.py
 from routers import chat, conversations, memory, merge
+
+MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 
 app = FastAPI(title="projectX")
 

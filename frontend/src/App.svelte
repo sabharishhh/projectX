@@ -230,6 +230,24 @@
       sendMessage();
     }
   }
+
+  function citationSources(activity) {
+    const sources = {};
+    for (const act of activity ?? []) {
+      if (act.kind === "source" && act.citation) {
+        sources[act.citation] = { url: act.url, preview: act.preview };
+      } else if (act.kind === "search" && act.results?.length) {
+        act.results.forEach((r, i) => {
+          sources[i + 1] = { url: r.url, title: r.title, preview: r.summary };
+        });
+      }
+    }
+    return sources;
+  }
+
+  function visibleActivity(activity) {
+    return (activity ?? []).filter((a) => a.kind !== "source");
+  }
 </script>
 
 <svelte:head>
@@ -239,6 +257,8 @@
     href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet"
   />
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 </svelte:head>
 
 <div class="app">
@@ -300,13 +320,13 @@
           <div class="turn user"><div class="said">{msg.content}</div></div>
         {:else}
           <div class="turn assistant">
-            <div class="prose">{@html renderMarkdown(msg.content)}</div>
+            <div class="prose">{@html renderMarkdown(msg.content, citationSources(msg.activity))}</div>
 
             {#if msg.error}
               <div class="error"><span class="tag">error</span>{msg.error}</div>
             {/if}
 
-            {#each msg.activity ?? [] as act}
+            {#each visibleActivity(msg.activity) as act}
               {#if act.kind === "conflict"}
                 <ConflictBlock {act} onResolve={(choice) => resolve(act, choice)} />
               {:else if act.kind === "forget_request"}
@@ -504,16 +524,24 @@
   .prose :global(h2) { font-size: 1.1rem; }
   .prose :global(h3) { font-size: 1rem; }
 
+  /* Explicitly restore bold styling to override CSS resets */
+  .prose :global(strong),
+  .prose :global(b) {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  /* Restrict list styling to direct children only using '>' */
   .prose :global(ul) {
     list-style: none;
     margin: 0.5rem 0;
     padding-left: 1.3rem;
   }
-  .prose :global(ul li) {
+  .prose :global(ul > li) {
     position: relative;
     margin: 0.35rem 0;
   }
-  .prose :global(ul li::before) {
+  .prose :global(ul > li::before) {
     content: "";
     position: absolute;
     left: -1.05rem;
@@ -528,17 +556,62 @@
     margin: 0.5rem 0;
     padding-left: 1.4rem;
   }
-  .prose :global(ol li) {
+  .prose :global(ol > li) {
     margin: 0.35rem 0;
   }
-  .prose :global(ol li::marker) {
+  .prose :global(ol > li::marker) {
     color: var(--accent-memory);
     font-weight: 600;
   }
-
+  
   .prose :global(a) {
     color: var(--accent-memory);
   }
+
+  .prose :global(.citation) {
+    position: relative;
+    display: inline-block;
+  }
+  .prose :global(.citation a) {
+    font-size: 0.7em;
+    vertical-align: super;
+    color: var(--accent-search);
+    background: var(--surface-sunken);
+    border-radius: 3px;
+    padding: 0 0.3em;
+    text-decoration: none;
+    margin: 0 0.05em;
+  }
+  .prose :global(.citation a:hover) {
+    color: var(--surface-page);
+    background: var(--accent-search);
+  }
+  .prose :global(.citation::after) {
+    content: attr(data-preview);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(-6px);
+    width: max-content;
+    max-width: 20rem;
+    background: var(--surface-card);
+    border: 0.5px solid var(--border-hairline);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.65rem;
+    font-family: var(--font-technical);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+    z-index: 20;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  .prose :global(.citation:hover::after) {
+    opacity: 1;
+  }
+
   .prose :global(blockquote) {
     border-left: 2px solid var(--border-hairline);
     margin: 0.6rem 0;
@@ -552,6 +625,35 @@
     background: var(--surface-sunken);
     padding: 0.1rem 0.35rem;
     border-radius: var(--radius-sm);
+  }
+
+  /* Table Styling */
+  .prose :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.2rem 0;
+    font-size: 0.9rem;
+    background: var(--surface-card);
+    border-radius: var(--radius-sm);
+    overflow: hidden; /* Keeps the rounded corners intact */
+  }
+
+  .prose :global(th),
+  .prose :global(td) {
+    padding: 0.6rem 0.85rem;
+    border: 0.5px solid var(--border-hairline);
+    text-align: left;
+  }
+
+  .prose :global(th) {
+    background: var(--surface-sunken);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  /* Optional: Subtle alternating row colors for readability */
+  .prose :global(tr:nth-child(even)) {
+    background: var(--surface-veil);
   }
 
   .prose :global(.code-block) {
@@ -597,7 +699,7 @@
     font-family: var(--font-technical);
     font-size: 0.82rem;
     color: #e4e6e1;
-    background: none;
+    background: none !important;
     padding: 0;
   }
 
@@ -665,4 +767,6 @@
     opacity: 0.45;
     cursor: default;
   }
+
+
 </style>

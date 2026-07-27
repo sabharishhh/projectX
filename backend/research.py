@@ -99,7 +99,12 @@ def research(provider, query: str, discover_limit: int = 5, read_top: int = READ
 def format_for_context(query: str, distilled: list[dict]) -> str:
     if not distilled:
         return ""
-    lines = [f'Web research on "{query}":']
+    lines = [
+        f'Web research on "{query}":',
+        "Cite these sources inline using [1], [2], etc. when you use information "
+        "from them. Only cite a source for a claim it actually supports.",
+        "",
+    ]
     for i, d in enumerate(distilled, 1):
-        lines.append(f"{i}. {d['title']} ({d['url']})\n   {d['summary']}")
+        lines.append(f"[{i}] {d['title']} ({d['url']})\n{d['summary']}")
     return "\n".join(lines)

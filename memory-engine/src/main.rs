@@ -420,7 +420,7 @@ async fn main() {
     let _ = embedder.embed_query("warmup").expect("embedder warmup failed");
     let _ = reranker.rerank("warmup", &["warmup document"]).expect("reranker warmup failed");
 
-    
+
     let app_state = Arc::new(AppState { store, embedder, reranker });
 
     let app = Router::new()

@@ -9,10 +9,13 @@ import extraction
 mcp = FastMCP("projectx-web")
 MAX_FETCH_CHARS = 8000  # keep one fetch from blowing the context budget
 
+NOT_EXTRACTED_PREFIX = "Could not extract content from"
 
 @mcp.tool()
 def web_search(query: str, limit: int = 5) -> str:
-    """Search the web and return candidate results (title, url, snippet)."""
+    """Search the web and return candidate results (title, url, snippet).
+    Snippets are too short to cite directly — use web_fetch on a result
+    before citing it."""
     results = discovery.discover(query, limit=limit)
     if not results:
         return "No results."
@@ -21,10 +24,11 @@ def web_search(query: str, limit: int = 5) -> str:
 
 @mcp.tool()
 def web_fetch(url: str) -> str:
-    """Fetch a specific URL and return its main text content."""
+    """Fetch a specific URL and return its main text content. Only call this
+    on a URL you intend to actually use/cite."""
     page = extraction.extract_page(url)
     if not page["text"]:
-        return f"Could not extract content from {url}."
+        return f"{NOT_EXTRACTED_PREFIX} {url}."
     return page["text"][:MAX_FETCH_CHARS]
 
 
