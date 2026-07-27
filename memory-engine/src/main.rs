@@ -18,7 +18,7 @@ struct AppState {
     reranker: Reranker,
 }
 
-const RERANK_K: usize = 16;
+const DENSE_POOL_K: usize = 50;
 
 fn default_branch() -> String {
     "main".to_string()
@@ -259,13 +259,14 @@ async fn retrieve(
         .map_err(internal)?;
     let embeddings = app.store.embeddings_for(&rest).map_err(internal)?;
 
-    let scored = memory_engine::retrieval::score(&req.query, &query_embedding, &rest, &embeddings, &req.boost_types);
+    let scored = memory_engine::retrieval::score(&req.query, &query_embedding, rest, &embeddings, &req.boost_types);
+
     // Cascade: blended score picks the top RERANK_K worth spending the
     // reranker's real compute on; the reranker then decides final order
     // within just that set — it doesn't re-filter, only re-ranks.
     let rerank_candidates: Vec<(String, MemoryUnit)> = scored
         .into_iter()
-        .take(RERANK_K)
+        .take(DENSE_POOL_K)
         .map(|s| (s.hash, s.unit))
         .collect();
 
@@ -286,11 +287,6 @@ async fn retrieve(
         .map(|((hash, unit), score)| (UnitView { hash, unit }, score))
         .collect();
     reranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-    // temporary: expose raw scores to sanity-check the reranker isn't flat
-    for (i, (uv, score)) in reranked.iter().enumerate() {
-        eprintln!("rerank[{i}]: {:.4} — {}", score, uv.unit.content);
-    }
 
     let remaining = req.max_units.saturating_sub(out.len());
     out.extend(reranked.into_iter().take(remaining).map(|(uv, _)| uv));

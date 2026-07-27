@@ -1,99 +1,52 @@
 use std::collections::HashMap;
 
-use rust_stemmers::{Algorithm, Stemmer};
-
 use crate::unit::{MemoryUnit, UnitType};
+
+/// Minimal contract for anything the retriever can rank. MemoryUnit is the
+/// only implementer today; conversation turns or documents can implement
+/// this later without becoming MemoryUnits or duplicating scoring logic.
+pub trait Retrievable {
+    fn id(&self) -> &str;
+    fn text(&self) -> &str;
+}
+
+impl Retrievable for (String, MemoryUnit) {
+    fn id(&self) -> &str { &self.0 }
+    fn text(&self) -> &str { &self.1.content }
+}
+
+pub struct RankedItem<T> {
+    pub item: T,
+    pub dense_score: f64,
+}
+
+/// Source-agnostic dense ranking. Deliberately has no notion of type
+/// priority, recency, or boost — those are MemoryUnit-specific concepts,
+/// not universal to everything retrievable, and stay in `score()` below.
+pub fn rank_by_relevance<T: Retrievable>(
+    query_embedding: &[f32],
+    items: Vec<T>,
+    embeddings: &HashMap<String, Vec<f32>>,
+) -> Vec<RankedItem<T>> {
+    let mut ranked: Vec<RankedItem<T>> = items
+        .into_iter()
+        .map(|item| {
+            let dense_score = embeddings
+                .get(item.id())
+                .map(|e| crate::embedding::cosine_sim(query_embedding, e) as f64)
+                .unwrap_or(0.0);
+            RankedItem { item, dense_score }
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.dense_score.partial_cmp(&a.dense_score).unwrap());
+    ranked
+}
 
 pub struct ScoredUnit {
     pub hash: String,
     pub unit: MemoryUnit,
     pub score: f64,
-    pub bm25_score: f64,
     pub dense_score: f64,
-}
-
-const K1: f64 = 1.2;
-const B: f64 = 0.75;
-const MIN_BM25_SCORE: f64 = 0.05;
-// Cosine floor for bge-base-en. Starting guess, not measured — BGE
-// embeddings of unrelated sentences typically sit ~0.2-0.3 due to
-// anisotropy, so this needs the same empirical tuning MIN_BM25_SCORE got.
-const MIN_DENSE_SCORE: f64 = 0.35;
-
-fn tokenize(text: &str) -> Vec<String> {
-    let stemmer = Stemmer::create(Algorithm::English);
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() > 1)
-        .map(|w| stemmer.stem(w).to_string())
-        .collect()
-}
-
-fn bm25_scores(query: &str, units: &[(String, MemoryUnit)]) -> HashMap<String, f64> {
-    let query_terms = tokenize(query);
-    if query_terms.is_empty() || units.is_empty() {
-        return HashMap::new();
-    }
-
-    let doc_tokens: Vec<(String, Vec<String>)> = units
-        .iter()
-        .map(|(hash, unit)| (hash.clone(), tokenize(&unit.content)))
-        .collect();
-
-    let n = doc_tokens.len() as f64;
-    let avgdl: f64 = doc_tokens.iter().map(|(_, t)| t.len() as f64).sum::<f64>() / n;
-
-    let df: HashMap<&str, f64> = query_terms
-        .iter()
-        .map(|term| {
-            let count = doc_tokens
-                .iter()
-                .filter(|(_, tokens)| tokens.contains(term))
-                .count() as f64;
-            (term.as_str(), count)
-        })
-        .collect();
-
-    doc_tokens
-        .iter()
-        .map(|(hash, tokens)| {
-            let dl = tokens.len() as f64;
-            let score: f64 = query_terms
-                .iter()
-                .map(|term| {
-                    let tf = tokens.iter().filter(|t| *t == term).count() as f64;
-                    if tf == 0.0 {
-                        return 0.0;
-                    }
-                    let n_t = *df.get(term.as_str()).unwrap_or(&0.0);
-                    let idf = ((n - n_t + 0.5) / (n_t + 0.5)).ln();
-                    let denom = tf + K1 * (1.0 - B + B * dl / avgdl);
-                    idf * (tf * (K1 + 1.0)) / denom
-                })
-                .sum();
-            (hash.clone(), score)
-        })
-        .collect()
-}
-
-/// Cosine similarity of `query_embedding` against each unit's cached
-/// embedding. A unit missing an embedding scores 0 here and falls back
-/// entirely on BM25 — never panics on incomplete backfill.
-fn dense_scores(
-    query_embedding: &[f32],
-    units: &[(String, MemoryUnit)],
-    embeddings: &HashMap<String, Vec<f32>>,
-) -> HashMap<String, f64> {
-    units
-        .iter()
-        .map(|(hash, _)| {
-            let sim = embeddings
-                .get(hash)
-                .map(|e| crate::embedding::cosine_sim(query_embedding, e) as f64)
-                .unwrap_or(0.0);
-            (hash.clone(), sim)
-        })
-        .collect()
 }
 
 fn recency_score(created_at: chrono::DateTime<chrono::Utc>) -> f64 {
@@ -111,51 +64,27 @@ fn type_priority(unit_type: UnitType, query: &str) -> f64 {
     }
 }
 
-/// Ranks units by relevance to `query`. A unit qualifies if BM25 clears its
-/// floor, OR dense similarity clears its floor, OR the query's phrasing
-/// signals intent for this unit's type — any one is sufficient, since each
-/// signal has a blind spot the others cover.
+/// MemoryUnit-specific ranking: dense relevance (via rank_by_relevance)
+/// blended with recency, type-intent matching, and skill boost.
 pub fn score(
     query: &str,
     query_embedding: &[f32],
-    units: &[(String, MemoryUnit)],
+    units: Vec<(String, MemoryUnit)>,
     embeddings: &HashMap<String, Vec<f32>>,
     boost: &[UnitType],
 ) -> Vec<ScoredUnit> {
-    let bm25 = bm25_scores(query, units);
-    let dense = dense_scores(query_embedding, units, embeddings);
+    let ranked = rank_by_relevance(query_embedding, units, embeddings);
 
-    let mut scored: Vec<ScoredUnit> = units
-        .iter()
-        .filter_map(|(hash, unit)| {
-            let bm25_relevance = *bm25.get(hash).unwrap_or(&0.0);
-            let dense_relevance = *dense.get(hash).unwrap_or(&0.0);
+    let mut scored: Vec<ScoredUnit> = ranked
+        .into_iter()
+        .map(|r| {
+            let (hash, unit) = r.item;
             let priority = type_priority(unit.unit_type, query);
-
-            let intent_match = priority > 1.0;
-            let qualifies = bm25_relevance >= MIN_BM25_SCORE
-                || dense_relevance >= MIN_DENSE_SCORE
-                || intent_match;
-            if !qualifies {
-                return None;
-            }
-
             let recency = recency_score(unit.created_at);
             let skill_boost = if boost.contains(&unit.unit_type) { 1.4 } else { 1.0 };
+            let blended = (r.dense_score.max(0.0) + recency * 0.2) * priority * skill_boost;
 
-            // Dense weighted 2x as the validated signal; BM25 stays in as
-            // a cheap exact-match booster it's genuinely good at.
-            let blended = (dense_relevance.max(0.0) * 2.0 + bm25_relevance.max(0.0) + recency)
-                * priority
-                * skill_boost;
-
-            Some(ScoredUnit {
-                hash: hash.clone(),
-                unit: unit.clone(),
-                score: blended,
-                bm25_score: bm25_relevance,
-                dense_score: dense_relevance,
-            })
+            ScoredUnit { hash, unit, score: blended, dense_score: r.dense_score }
         })
         .collect();
 
