@@ -41,6 +41,7 @@ def stream_chat(conversation_id: str, message: str):
     # Retrieval scoring (relevance + recency + pinned set) now decides what's
     # worth injecting, instead of a folder-like filter deciding it first.
     known = [{**u, "branch": b} for b in allowed_branches for u in fetch_state(b)]
+    forget_matches = forgetting.detect_forget_request(provider, message, known, allowed_branches)
 
     seen, all_candidates = set(), []
     per_branch_debug = {}
@@ -75,8 +76,32 @@ def stream_chat(conversation_id: str, message: str):
     visible_history = history[-summarization.WINDOW_MESSAGES:]
     summary = summarization.get_current_summary(conversation_id)
 
+    forget_context = None
+    if forget_matches:
+        matched = "; ".join(f'"{m["unit"]["content"]}"' for m in forget_matches)
+        forget_context = {
+            "role": "system",
+            "content": (
+                f"The user's message matches a stored fact you can forget: {matched}. "
+                "A confirmation prompt will render below your reply — acknowledge this "
+                "specifically and naturally. Do not say you're unable to forget or delete memory."
+            ),
+        }
+    elif forgetting.mentions_forgetting(message):
+        forget_context = {
+            "role": "system",
+            "content": (
+                "The user's message sounds like a request to forget something, but no "
+                "confident match was found among stored facts — either it's already been "
+                "forgotten, or the reference isn't clear. Do NOT claim a confirmation prompt "
+                "will appear, since none will. Say you couldn't find a matching stored fact, "
+                "or ask them to clarify."
+            ),
+        }
+
     conversation = [build_system_message(injected, (skill or {}).get("system_prompt"))] \
         + ([{"role": "system", "content": f"Summary of earlier conversation:\n{summary}"}] if summary else []) \
+        + ([forget_context] if forget_context else []) \
         + to_provider_messages(visible_history) \
         + [{"role": "user", "content": message}]
 
@@ -185,7 +210,6 @@ def stream_chat(conversation_id: str, message: str):
     # that's exactly what produced a bogus "user wants X forgotten" memory
     # unit in testing. Skipping capture entirely on a forget-request turn is
     # the deterministic fix; relying on the model to self-censor was not.
-    forget_matches = forgetting.detect_forget_request(provider, message, known)
     units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches)
     added, conflicts = [], []
 

@@ -26,6 +26,12 @@ JUDGMENT_GUIDANCE = (
     "assistance, or explicit feedback on a draft."
 )
 
+FORGET_CAPABILITY = (
+    "You do have the ability to forget or delete stored memory, mediated "
+    "through a confirmation prompt the user sees in the interface — never "
+    "claim you're unable to forget or delete something."
+)
+
 def fetch_state(branch: str = "main") -> list[dict]:
     try:
         r = httpx.get(f"{MEMORY_URL}/state", params={"branch": branch}, timeout=REQUEST_TIMEOUT)
@@ -58,7 +64,7 @@ def fetch_branches() -> list[str]:
         return []
 
 def build_system_message(units: list[dict], skill_prompt: str | None = None) -> dict:
-    parts = [IDENTITY, JUDGMENT_GUIDANCE]
+    parts = [IDENTITY, JUDGMENT_GUIDANCE, FORGET_CAPABILITY]
 
     if skill_prompt:
         parts.append(skill_prompt)
