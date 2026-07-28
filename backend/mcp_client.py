@@ -20,8 +20,8 @@ class MCPClient:
         self._session = await self._stack.enter_async_context(ClientSession(read, write))
         await self._session.initialize()
 
-    def _run(self, coro):
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+    def _run(self, coro, timeout: float | None = None):
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=timeout)
 
     def list_tools(self) -> list[dict]:
         async def _do():
@@ -30,11 +30,11 @@ class MCPClient:
                     for t in result.tools]
         return self._run(_do())
 
-    def call_tool(self, name: str, arguments: dict) -> str:
+    def call_tool(self, name: str, arguments: dict, timeout: float = 30.0) -> str:
         async def _do():
             result = await self._session.call_tool(name, arguments)
             return "\n".join(b.text for b in result.content if getattr(b, "text", None))
-        return self._run(_do())
+        return self._run(_do(), timeout=timeout)
 
     def close(self):
         self._run(self._stack.aclose())

@@ -10,7 +10,8 @@
     skill:        { icon:'ti-pencil',        accent:'var(--accent-skill)' },
     searching:    { icon:'ti-radar',         accent:'var(--accent-search)' },
     search:       { icon:'ti-world-search',  accent:'var(--accent-search)' },
-    search_failed:{ icon:'ti-plug-off',      accent:'var(--accent-attention)' }
+    search_failed:{ icon:'ti-plug-off',      accent:'var(--accent-attention)' },
+    tool_group:   { icon:'ti-world-search',  accent:'var(--accent-search)' }
   };
 
   const m = $derived(KINDS[act.kind] ?? { icon:'ti-point', accent:'var(--accent-skill)' });
@@ -37,6 +38,14 @@
           <a href={r.url} target="_blank" rel="noreferrer">{r.title}</a>
           <p class="summary">{r.summary}</p>
         </li>
+      {/each}
+    </ul>
+  </Collapsible>
+{:else if act.steps?.length}
+  <Collapsible label={act.label} icon={m.icon} accent={m.accent} count={act.steps.length}>
+    <ul class="steps">
+      {#each act.steps as step}
+        <li in:reveal>{step}</li>
       {/each}
     </ul>
   </Collapsible>
@@ -97,9 +106,10 @@
     50% { opacity: 1; } 
   }
 
-  .units, .results { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2); }
+  .units, .results, .steps { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2); }
   .units li { font-size:var(--size-meta); line-height:var(--leading-tight); }
   .type { display:block; color:var(--text-muted); margin-top:2px; }
   .results a { color:var(--accent-search); font-size:var(--size-meta); }
   .results .summary { margin:2px 0 0; color:var(--text-secondary); font-size:var(--size-caption); }
+  .steps li { font-size:var(--size-meta); color:var(--text-secondary); line-height:var(--leading-tight); }
 </style>

@@ -16,7 +16,7 @@ MAX_ATTEMPTS = 2
 
 
 class AnthropicProvider(Provider):
-    supports_tools = True
+    supports_tools = False
 
     def __init__(self, api_key: str):
             transport = httpx.HTTPTransport(local_address="0.0.0.0")

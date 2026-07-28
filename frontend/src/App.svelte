@@ -25,6 +25,23 @@
     return fresh;
   }
 
+  function groupedActivity(activity) {
+    const out = [];
+    for (const act of visibleActivity(activity)) {
+      if (act.kind === "tool_step") {
+        const last = out[out.length - 1];
+        if (last?.kind === "tool_group") {
+          last.steps.push(act.label);
+        } else {
+          out.push({ kind: "tool_group", label: "Searching the web", steps: [act.label] });
+        }
+      } else {
+        out.push(act);
+      }
+    }
+    return out;
+  }
+
   let CONVERSATION_ID = $state(loadInitialConversationId());
 
   let messages = $state([]);
@@ -326,7 +343,7 @@
               <div class="error"><span class="tag">error</span>{msg.error}</div>
             {/if}
 
-            {#each visibleActivity(msg.activity) as act}
+            {#each groupedActivity(msg.activity) as act}
               {#if act.kind === "conflict"}
                 <ConflictBlock {act} onResolve={(choice) => resolve(act, choice)} />
               {:else if act.kind === "forget_request"}

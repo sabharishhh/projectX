@@ -2,13 +2,15 @@ import json
 from uuid import uuid4
 
 import ledger
-import research
+import chatlog
 import branching
 import forgetting
 import summarization
 import agentic_search
 import skills as skill_registry
 
+import fixed_search
+import search_decision as search_decision_module
 from capture import extract_units, commit_unit
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message
 from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
@@ -98,12 +100,20 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
-    # research-skill turns on a tool-calling-capable provider get the agentic
-    # web_search/web_fetch loop (agentic_search.py, via the local MCP server).
-    # Everything else — other skills, no skill, or a provider without tool
-    # support (e.g. local models) — keeps the original fixed pipeline below.
+    search_decision = None
+    if skill_registry.allows(skill, "web_search"):
+        search_decision = search_decision_module.should_search(provider, message)
+
+    # Routing is complexity-aware, not just provider-capability-gated:
+    # "iterative" queries (genuine ambiguity, multi-source cross-checking)
+    # go to the agentic loop when the provider supports it; "simple" queries
+    # always take the cheaper fixed pipeline, even on a tool-capable
+    # provider — no reason to pay for a multi-round loop on a lookup that
+    # doesn't need one. A provider without tool support still falls back to
+    # fixed_search for ANY complexity — degraded, not broken.
     use_agentic = (
-        skill and skill["name"] == "research"
+        search_decision is not None
+        and search_decision["complexity"] == "iterative"
         and skill_registry.allows(skill, "web_fetch")
         and provider.supports_tools
     )
@@ -122,32 +132,29 @@ def stream_chat(conversation_id: str, message: str):
             yield _sse({"type": "error", "message": str(e)})
             return
     else:
-        search_query = None
-        if skill_registry.allows(skill, "web_search"):
-            search_query = research.should_search(provider, message)
-
-        if search_query:
-            yield _sse({"type": "activity", "event": {"kind": "searching", "label": f"Searching: {search_query}"}})
-            distilled = research.research(provider, search_query)
+        if search_decision:
+            query = search_decision["query"]
+            yield _sse({"type": "activity", "event": {"kind": "searching", "label": f"Searching: {query}"}})
+            distilled = fixed_search.research(provider, query)
             if distilled:
                 ev = {
                     "kind": "search",
-                    "label": f"Read {len(distilled)} page{'s' if len(distilled) != 1 else ''}: {search_query}",
+                    "label": f"Read {len(distilled)} page{'s' if len(distilled) != 1 else ''}: {query}",
                     "results": distilled,
                 }
                 activity_log.append(ev)
                 yield _sse({"type": "activity", "event": ev})
                 conversation.append({
                     "role": "system",
-                    "content": research.format_for_context(search_query, distilled),
+                    "content": fixed_search.format_for_context(query, distilled),
                 })
-                ledger.log("search_call", f"{search_query} ({len(distilled)} pages read)",
+                ledger.log("search_call", f"{query} ({len(distilled)} pages read)",
                            conversation_id, actor="system")
             else:
-                ev = {"kind": "search_failed", "label": f"Searched, but couldn't read any results: {search_query}"}
+                ev = {"kind": "search_failed", "label": f"Searched, but couldn't read any results: {query}"}
                 activity_log.append(ev)
                 yield _sse({"type": "activity", "event": ev})
-                ledger.log("search_call", f"{search_query} (0 pages read — extraction failed)",
+                ledger.log("search_call", f"{query} (0 pages read — extraction failed)",
                            conversation_id, actor="system")
 
         try:
@@ -242,4 +249,5 @@ def stream_chat(conversation_id: str, message: str):
         history + [{"role": "user", "content": message}, {"role": "assistant", "content": full_response}],
     )
 
+    chatlog.log_turn(conversation_id, message, skill, injected, activity_log, full_response)
     yield _sse({"type": "done"})

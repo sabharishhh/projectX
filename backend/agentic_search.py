@@ -16,7 +16,7 @@ from mcp_client import MCPClient
 from mcp_server import NOT_EXTRACTED_PREFIX
 
 logger = logging.getLogger("agentic_search")
-MAX_TOOL_ITERATIONS = 5
+MAX_TOOL_ITERATIONS = 7
 _client: MCPClient | None = None
 
 CITATION_INSTRUCTION = (
@@ -43,13 +43,15 @@ def _to_responses_tools(mcp_tools: list[dict]) -> list[dict]:
 
 def run(provider, model: str, conversation: list[dict], reasoning_effort: str = "none"):
     """Yields the same {"type": "text"/"activity"} shapes chat_engine already
-    streams. web_fetch calls now also emit a {"kind": "source", "citation":
-    n, "url": ...} activity event — data for the frontend to eventually
-    render [n] as a link, not wired up on the frontend yet."""
+    streams. If the model is still calling tools when MAX_TOOL_ITERATIONS
+    runs out, forces one final tools-disabled pass so the turn always ends
+    with a real answer instead of silently returning nothing — previously,
+    exhausting the loop mid-research (every round making a tool call, none
+    left over to just answer) produced an empty response with no error."""
     client = _get_client()
     tools = _to_responses_tools(client.list_tools())
     messages = list(conversation) + [{"role": "system", "content": CITATION_INSTRUCTION}]
-    sources: dict[str, int] = {}  # url -> citation number, fetched sources only
+    sources: dict[str, int] = {}
 
     for _ in range(MAX_TOOL_ITERATIONS):
         made_call = False
@@ -58,8 +60,11 @@ def run(provider, model: str, conversation: list[dict], reasoning_effort: str = 
                 yield {"type": "text", "value": event["text"]}
             elif event["type"] == "tool_call":
                 made_call = True
-                args = ", ".join(f"{k}={v!r}" for k, v in event["input"].items())
-                yield {"type": "activity", "event": {"kind": "search", "label": f"{event['name']}({args})"}}
+                if event["name"] == "web_search":
+                    step_label = f"Searching: {event['input'].get('query', '')}"
+                else:
+                    step_label = f"Reading: {event['input'].get('url', '')}"
+                yield {"type": "activity", "event": {"kind": "tool_step", "label": step_label}}
 
                 fetch_ok = False
                 try:
@@ -80,4 +85,18 @@ def run(provider, model: str, conversation: list[dict], reasoning_effort: str = 
                                   "name": event["name"], "arguments": json.dumps(event["input"])})
                 messages.append({"type": "function_call_output", "call_id": event["call_id"], "output": result})
         if not made_call:
-            break
+            return  # model produced a real final answer on its own — done
+
+    # Ran out of iterations while the model was still trying to call tools.
+    # Force one last pass with no tools available, so it's structurally
+    # unable to keep researching and has to answer with what it's gathered.
+    logger.warning(f"agentic_search hit MAX_TOOL_ITERATIONS={MAX_TOOL_ITERATIONS} without a final answer — forcing synthesis")
+    messages.append({
+        "role": "system",
+        "content": "You've used all available search attempts. Answer now using "
+                    "only what you've already gathered, even if incomplete. Say "
+                    "what's uncertain or missing rather than continuing to search.",
+    })
+    for event in provider.stream_with_tools(messages, model, tools=[], reasoning_effort=reasoning_effort):
+        if event["type"] == "text":
+            yield {"type": "text", "value": event["text"]}

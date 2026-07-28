@@ -1,5 +1,9 @@
-import json
-import os
+"""One-shot fixed search pipeline: discover candidates, read the top few,
+summarize each independently. No model judgment mid-loop — the alternative
+to agentic_search.py's iterative model-driven loop. Used when the query is
+judged "simple" (search_decision.py) or when the provider can't do tool
+calling at all."""
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import extraction
@@ -8,23 +12,10 @@ import search as discovery
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
-logger = logging.getLogger("research")
-
+logger = logging.getLogger("fixed_search")
 
 from state import CAPTURE_MODEL as DISTILL_MODEL
 READ_TOP_N = 3  # how many discovered pages actually get fetched + read
-
-SEARCH_DECISION_PROMPT = """Does answering this message require current information
-from the web — recent events, today's facts, specific current data, or anything
-that changes over time?
-
-Answer with JSON only:
-{"search": true, "query": "concise search query"}
-or
-{"search": false}
-
-Do NOT search for: general knowledge, definitions, coding help, writing tasks,
-math, opinions, or anything about the user themselves."""
 
 DISTILL_PROMPT = """The user asked: "{query}"
 
@@ -43,16 +34,6 @@ def _call(provider, system: str, user: str) -> str:
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         DISTILL_MODEL,
     ))
-
-
-def should_search(provider, message: str) -> str | None:
-    try:
-        raw = _call(provider, SEARCH_DECISION_PROMPT, message)
-        parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-        return parsed.get("query") if parsed.get("search") else None
-    except Exception as e:
-        logger.warning(f"should_search failed to parse: {e!r}")
-        return None
 
 
 def _read_and_distill(provider, query: str, result: dict) -> dict | None:
