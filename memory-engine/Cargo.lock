@@ -1474,6 +1474,7 @@ dependencies = [
  "candle-transformers",
  "chrono",
  "hf-hub",
+ "regex",
  "rust-stemmers",
  "serde",
  "serde_json",

@@ -24,7 +24,8 @@ def _summarize_activity(activity_log: list[dict]) -> list[str]:
         elif kind == "memory_read":
             lines.append(f"recalled {len(a.get('units', []))} facts")
         elif kind == "memory_write":
-            lines.append(f"remembered {len(a.get('units', []))} things")
+            contents = "; ".join(u.get("content", "") for u in a.get("units", []))
+            lines.append(f"remembered {len(a.get('units', []))} things: {contents}")
         elif kind == "tool_step":
             lines.append(a.get("label", "tool step"))
         elif kind == "search":
@@ -35,6 +36,8 @@ def _summarize_activity(activity_log: list[dict]) -> list[str]:
             lines.append(f"conflict: '{a.get('old', {}).get('content', '')}' vs '{a.get('new', {}).get('content', '')}'")
         elif kind == "forget_request":
             lines.append(f"forget requested: {a.get('content', '')}")
+        elif kind == "duplicate_skipped":
+            lines.append(f"duplicate skipped: {a.get('content', '')}")
     return lines
 
 

@@ -11,6 +11,7 @@ candle-nn = { version = "0.11", features = ["accelerate"] }
 candle-transformers = { version = "0.11", features = ["accelerate"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 hf-hub = "0.4"
+regex = "1.13.1"
 rust-stemmers = "1.2.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

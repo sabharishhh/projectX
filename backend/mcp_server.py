@@ -1,15 +1,23 @@
-"""Local MCP server exposing web_search and web_fetch. Launched as a
-subprocess over stdio by mcp_client.py — not a standalone network service."""
+"""Local MCP server exposing projectX's agent-facing tools — web_search,
+web_fetch, and memory_search. One process, one tool surface, launched as a
+subprocess over stdio by mcp_client.py. Each tool stays narrow and
+single-purpose on its own terms (read-only where relevant, hard-scoped) —
+bundling them into one server is a deployment/organizational choice, not a
+loosening of any individual tool's constraints."""
 
+import os
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 import search as discovery
 import extraction
 
-mcp = FastMCP("projectx-web")
-MAX_FETCH_CHARS = 8000  # keep one fetch from blowing the context budget
+mcp = FastMCP("projectx-tools")
+MAX_FETCH_CHARS = 8000
+MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 
 NOT_EXTRACTED_PREFIX = "Could not extract content from"
+
 
 @mcp.tool()
 def web_search(query: str, limit: int = 5) -> str:
@@ -23,14 +31,22 @@ def web_search(query: str, limit: int = 5) -> str:
 
 
 @mcp.tool()
-def web_fetch(url: str) -> str:
-    """Fetch a specific URL and return its main text content. Only call this
-    on a URL you intend to actually use/cite."""
-    page = extraction.extract_page(url)
-    if not page["text"]:
-        return f"{NOT_EXTRACTED_PREFIX} {url}."
-    return page["text"][:MAX_FETCH_CHARS]
+def memory_search(pattern: str, branch: str = "main") -> str:
+    """Search the user's saved memory for an exact word/phrase (regex
+    pattern) — for precise recall ("what exactly did I say about X"), not
+    the general semantic recall already injected into context. Read-only,
+    scoped to currently-active memory in one branch. Does not search
+    forgotten/superseded facts."""
+    try:
+        r = httpx.get(f"{MEMORY_URL}/search", params={"pattern": pattern, "branch": branch}, timeout=10.0)
+        r.raise_for_status()
+        results = r.json()
+    except Exception as e:
+        return f"Memory search failed: {e!r}"
 
+    if not results:
+        return "No matches."
+    return "\n\n".join(f"[{u['hash'][:8]}] {u['content']} ({u['unit_type']})" for u in results)
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")

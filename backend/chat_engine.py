@@ -104,25 +104,39 @@ def stream_chat(conversation_id: str, message: str):
     if skill_registry.allows(skill, "web_search"):
         search_decision = search_decision_module.should_search(provider, message)
 
-    # Routing is complexity-aware, not just provider-capability-gated:
-    # "iterative" queries (genuine ambiguity, multi-source cross-checking)
-    # go to the agentic loop when the provider supports it; "simple" queries
-    # always take the cheaper fixed pipeline, even on a tool-capable
-    # provider — no reason to pay for a multi-round loop on a lookup that
-    # doesn't need one. A provider without tool support still falls back to
-    # fixed_search for ANY complexity — degraded, not broken.
-    use_agentic = (
+    memory_allowed = skill_registry.allows(skill, "memory_search")
+    web_iterative = (
         search_decision is not None
         and search_decision["complexity"] == "iterative"
         and skill_registry.allows(skill, "web_fetch")
-        and provider.supports_tools
+    )
+    # True whenever there's a real web-search need that ISN'T being handled
+    # iteratively — i.e. "simple" complexity, or web_fetch isn't allowed for
+    # this skill. This case must always go to fixed_search below, even when
+    # memory_search also happens to be available — otherwise memory_search's
+    # near-universal availability silently swallows every simple web query
+    # into a tool loop that, without web tools attached, can't answer it.
+    web_needs_fixed_pipeline = search_decision is not None and not web_iterative
+
+    allowed_tools = set()
+    if memory_allowed:
+        allowed_tools.add("memory_search")
+    if web_iterative:
+        allowed_tools.update({"web_search", "web_fetch"})
+
+    use_agentic = (
+        provider.supports_tools
+        and bool(allowed_tools)
+        and not web_needs_fixed_pipeline
     )
 
     full_response = ""
 
     if use_agentic:
         try:
-            for event in agentic_search.run(provider, model, conversation, reasoning_effort=MAIN_REASONING_EFFORT):
+            for event in agentic_search.run(provider, model, conversation,
+                                             reasoning_effort=MAIN_REASONING_EFFORT,
+                                             allowed_tools=allowed_tools):
                 if event["type"] == "text":
                     full_response += event["value"]
                 yield _sse(event)
@@ -165,10 +179,22 @@ def stream_chat(conversation_id: str, message: str):
             yield _sse({"type": "error", "message": str(e)})
             return
 
-    units = extract_units(provider, message, full_response, known, allowed_branches)
+    # Forget requests are detected BEFORE capture now, not after. Capture has
+    # no way to honor its own "don't create a unit describing a forget
+    # request" rule if it runs first without knowing this message is one —
+    # that's exactly what produced a bogus "user wants X forgotten" memory
+    # unit in testing. Skipping capture entirely on a forget-request turn is
+    # the deterministic fix; relying on the model to self-censor was not.
+    forget_matches = forgetting.detect_forget_request(provider, message, known)
+    units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches)
     added, conflicts = [], []
 
     for u in units:
+        if any(k["content"] == u["content"] for k in known):
+            activity_log.append({"kind": "duplicate_skipped", "content": u["content"]})
+            continue  # verbatim duplicate of something already known — not a
+                    # conflict (nothing changed) and not a new fact (already
+                    # have it) — no-op either way
         short = u.get("supersedes")
         target = next((k for k in known if k["hash"].startswith(short)), None) if short else None
         branch = u.get("branch", "main")
@@ -209,14 +235,11 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
-    # Explicit forget requests — checked after capture/conflicts, and
-    # deliberately skips any unit capture already flagged as a conflict.
-    # Without this, a message like "I don't use vim anymore, I use emacs"
-    # could get interpreted BOTH as a contradiction (by capture) and as
-    # an implicit forget (by forget-detection) — surfacing two separate
-    # prompts asking the user to resolve the same underlying fact twice.
+    # forget_matches was already computed above, before capture ran — reused
+    # here, not recomputed. conflicted_hashes still guards against
+    # double-prompting when a message both matches a forget AND capture
+    # flagged a conflict on a different, unrelated fact in the same turn.
     conflicted_hashes = {c["old"]["hash"] for c in conflicts}
-    forget_matches = forgetting.detect_forget_request(provider, message, known)
     for m in forget_matches:
         if m["unit"]["hash"] in conflicted_hashes:
             continue  # capture already surfaced this as a conflict — don't ask twice

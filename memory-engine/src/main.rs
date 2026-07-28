@@ -135,6 +135,12 @@ struct RetrievedUnitView {
     score: f64,
 }
 
+#[derive(Deserialize)]
+struct SearchQuery {
+    pattern: String,
+    branch: Option<String>,
+}
+
 type ApiError = (StatusCode, String);
 
 
@@ -245,6 +251,16 @@ async fn forget(
         .map_err(internal)?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn memory_search(
+    State(app): State<Arc<AppState>>,
+    Query(q): Query<SearchQuery>,
+) -> Result<Json<Vec<UnitView>>, ApiError> {
+    let branch = q.branch.as_deref().unwrap_or("main");
+    check_branch(branch)?;
+    let matches = app.store.search_state(branch, &q.pattern).map_err(internal)?;
+    Ok(Json(matches.into_iter().map(|(hash, unit)| UnitView { hash, unit }).collect()))
 }
 
 async fn retrieve(
@@ -436,6 +452,7 @@ async fn main() {
         .route("/merge/preview", get(merge_preview))
         .route("/merge/apply", post(merge_apply))
         .route("/purge", post(purge))
+        .route("/search", get(memory_search))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 

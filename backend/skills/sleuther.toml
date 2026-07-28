@@ -1,7 +1,7 @@
-name = "research"
-description = "Investigating a topic, gathering current information, comparing options, fact-finding."
+name = "sleuther"
+description = "Investigating a topic, gathering current information, comparing options, fact-finding — including recalling exactly what you've told me before."
 
-tools = ["web_search", "web_fetch"]
+tools = ["web_search", "web_fetch", "memory_search"]
 boost_types = ["project", "decision"]
 
 system_prompt = """

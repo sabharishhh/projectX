@@ -9,10 +9,13 @@ use sha2::{Digest, Sha256};
 use crate::commit::{Commit, UnitChange};
 use crate::unit::MemoryUnit;
 
+use regex::Regex;
+
 #[derive(Debug)]
 pub enum StoreError {
     Io(io::Error),
     Serde(serde_json::Error),
+    Regex(regex::Error),
 }
 
 impl From<io::Error> for StoreError {
@@ -20,6 +23,12 @@ impl From<io::Error> for StoreError {
 }
 impl From<serde_json::Error> for StoreError {
     fn from(e: serde_json::Error) -> Self { StoreError::Serde(e) }
+}
+
+impl From<regex::Error> for StoreError {
+    fn from(e: regex::Error) -> Self {
+        StoreError::Regex(e)
+    }
 }
 
 /// Branch names become filenames under refs/, so they're restricted to
@@ -134,7 +143,11 @@ impl MemoryStore {
         for (_, commit) in self.history(commit_hash)?.into_iter().rev() {
             for change in commit.changes {
                 match change {
-                    UnitChange::Added { hash } => live.push(hash),
+                    UnitChange::Added { hash } => {
+                        if !live.contains(&hash) {
+                            live.push(hash);
+                        }
+                    }
                     UnitChange::Modified { from, to } => {
                         live.retain(|h| h != &from);
                         live.push(to);
@@ -151,6 +164,17 @@ impl MemoryStore {
             Some(h) => self.state_at(&h),
             None => Ok(Vec::new()),
         }
+    }
+
+    /// Exact/pattern search over a branch's current (live) state. Read-only,
+    /// scoped to units currently in HEAD — soft-forgotten (superseded) units
+    /// are deliberately excluded, same privacy boundary as everything else the
+    /// agent can already read. Full history search is a separate, unbuilt
+    /// capability, not this one.
+    pub fn search_state(&self, branch: &str, pattern: &str) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
+        let re = Regex::new(pattern)?;
+        let state = self.current_state(branch)?;
+        Ok(state.into_iter().filter(|(_, unit)| re.is_match(&unit.content)).collect())
     }
 
     // --- reset (dev only — wipes every branch, not just one) ---

@@ -24,13 +24,15 @@ Capture ONLY things that will still be true and useful in a future conversation:
 Do NOT capture:
 - questions they asked, or the content of tasks they gave you
 - topics merely discussed, rather than facts revealed about them
-- anything already in the known facts list below
+- anything already in the known facts list below — including when the
+  assistant's own reply in this exchange restates a known fact back to the
+  user. The assistant repeating something back is not new information about
+  the user; only extract from what the user actually said or clearly implied.
+- an inference you've already made before, even if you're re-deriving it
+  independently this turn rather than recalling it — check whether a
+  semantically equivalent fact already exists in the known list, not just
+  whether the exact wording matches
 - transient state ("I'm tired today")
-- a request to forget, remove, or stop remembering something — this is a
-  deletion instruction, not a new fact. Do NOT create a unit describing
-  that they asked to forget something, and do NOT treat it as superseding
-  the original fact. A separate system handles forgetting; your job here
-  is to recognize this case and produce nothing for it.
 
 If the user EXPLICITLY asks you to remember something ("remember that...",
 "please remember...", "keep in mind that..."), you MUST capture it as a
@@ -110,13 +112,6 @@ def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
     except Exception as e:
         logger.warning(f"commit_unit failed for {unit.get('content', '')!r}: {e!r}")
         return False
-
-
-def capture(provider, user_message: str, assistant_message: str,
-            known: list[dict], source: str) -> list[dict]:
-    """Extract and store. Returns the units actually committed."""
-    units = extract_units(provider, user_message, assistant_message, known)
-    return [u for u in units if commit_unit(u, source)]
 
 def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main") -> bool:
     try:
