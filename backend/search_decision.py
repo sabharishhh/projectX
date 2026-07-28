@@ -59,7 +59,7 @@ def _call(provider, system: str, user: str) -> str:
 
 def should_search(provider, message: str) -> dict | None:
     """Returns {"query": str, "complexity": "simple"|"iterative"} or None."""
-    if hasattr(provider, "complete_json"):
+    if provider.supports_structured_output:
         try:
             result = provider.complete_json(
                 [{"role": "system", "content": SEARCH_DECISION_PROMPT},

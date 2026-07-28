@@ -112,7 +112,7 @@ def stream_chat(conversation_id: str, message: str):
     activity_log = []
 
     if skill:
-        ev = {"kind": "skill", "label": f"Using {skill['name']} skill"}
+        ev = {"kind": "skill", "label": f"{skill['name']}ing"}
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 

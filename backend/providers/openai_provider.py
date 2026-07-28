@@ -17,13 +17,9 @@ MAX_ATTEMPTS = 2
 
 class OpenAIProvider(Provider):
     supports_tools = True
+    supports_structured_output = True
 
     def __init__(self, api_key: str):
-        # Force IPv4: diagnostics showed rapid bursts of connections stall
-        # intermittently, but the same burst over IPv4-only never did. This
-        # is a well-known class of issue on networks with a broken/slow
-        # IPv6 path — macOS tries IPv6 first and only falls back to IPv4
-        # after it stalls, which matches the symptom exactly.
         transport = httpx.HTTPTransport(local_address="0.0.0.0")
         http_client = httpx.Client(transport=transport, timeout=60.0)
         self.client = OpenAI(api_key=api_key, http_client=http_client, max_retries=1)
@@ -66,7 +62,7 @@ class OpenAIProvider(Provider):
             elif kind == "error":
                 raise payload
 
-    def stream(self, messages: list[dict], model: str, reasoning_effort: str = "none") -> Iterator[str]:
+    def _do_stream(self, messages: list[dict], model: str, reasoning_effort: str) -> Iterator[str]:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             logger.info(f"call started (model={model}, effort={reasoning_effort}, {len(messages)} msgs, attempt {attempt}/{MAX_ATTEMPTS})")
             yielded_anything = False
@@ -82,7 +78,7 @@ class OpenAIProvider(Provider):
                     raise
                 logger.info("retrying after transient failure...")
 
-    def complete_json(self, messages: list[dict], model: str, schema: dict, schema_name: str) -> dict:
+    def _do_complete_json(self, messages: list[dict], model: str, schema: dict, schema_name: str) -> dict:
         response = self.client.responses.create(
             model=model,
             input=messages,
@@ -95,8 +91,6 @@ class OpenAIProvider(Provider):
                 }
             },
         )
-        # strict:true guarantees valid, schema-conforming JSON — no markdown-fence
-        # stripping or try/except parsing needed, unlike the old stream()-based path.
         return json.loads(response.output_text)
 
     def _run_tools(self, messages: list[dict], model: str, tools: list[dict], reasoning_effort: str, out: queue.Queue):
@@ -149,7 +143,7 @@ class OpenAIProvider(Provider):
             elif kind == "error":
                 raise payload
 
-    def stream_with_tools(self, messages: list[dict], model: str, tools: list[dict], reasoning_effort: str = "none") -> Iterator[dict]:
+    def _do_stream_with_tools(self, messages: list[dict], model: str, tools: list[dict], reasoning_effort: str) -> Iterator[dict]:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             logger.info(f"tool call started (model={model}, effort={reasoning_effort}, {len(messages)} msgs, {len(tools)} tools, attempt {attempt}/{MAX_ATTEMPTS})")
             yielded_anything = False

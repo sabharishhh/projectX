@@ -5,6 +5,7 @@ single-purpose on its own terms (read-only where relevant, hard-scoped) —
 bundling them into one server is a deployment/organizational choice, not a
 loosening of any individual tool's constraints."""
 
+import json
 import os
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -21,13 +22,15 @@ NOT_EXTRACTED_PREFIX = "Could not extract content from"
 
 @mcp.tool()
 def web_search(query: str, limit: int = 5) -> str:
-    """Search the web and return candidate results (title, url, snippet).
-    Snippets are too short to cite directly — use web_fetch on a result
-    before citing it."""
+    """Search the web and return candidate results as a JSON list of
+    {title, url, snippet} objects. Returned as structured JSON, not
+    preformatted text, so the calling agent can cite each individual
+    result by URL — see agentic_search.py's citation handling. A snippet
+    alone is thinner grounding than a fetched page; prefer web_fetch when
+    a claim needs solid support, but a snippet may be cited directly when
+    it's sufficient on its own."""
     results = discovery.discover(query, limit=limit)
-    if not results:
-        return "No results."
-    return "\n\n".join(f"{r['title']}\n{r['url']}\n{r['snippet']}" for r in results)
+    return json.dumps(results)
 
 
 @mcp.tool()
@@ -47,6 +50,17 @@ def memory_search(pattern: str, branch: str = "main") -> str:
     if not results:
         return "No matches."
     return "\n\n".join(f"[{u['hash'][:8]}] {u['content']} ({u['unit_type']})" for u in results)
+
+
+@mcp.tool()
+def web_fetch(url: str) -> str:
+    """Fetch a specific URL and return its main text content. Only call this
+    on a URL you intend to actually use/cite."""
+    page = extraction.extract_page(url)
+    if not page["text"]:
+        return f"{NOT_EXTRACTED_PREFIX} {url}."
+    return page["text"][:MAX_FETCH_CHARS]
+
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")

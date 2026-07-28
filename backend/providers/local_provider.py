@@ -9,9 +9,6 @@ from .base import Provider
 
 logger = logging.getLogger("provider")
 
-# Local inference is often slower than a cloud API, especially on a model's
-# first load (weights loading into memory) — give it more room before
-# declaring a hard failure than the cloud providers get.
 HARD_DEADLINE_SECONDS = 180.0
 
 
@@ -22,8 +19,6 @@ class LocalProvider(Provider):
     the machine."""
 
     def __init__(self, base_url: str):
-        # local servers don't check the key, but the SDK requires some
-        # non-empty string to construct the client
         self.client = OpenAI(api_key="local", base_url=base_url, timeout=HARD_DEADLINE_SECONDS)
 
     def _run(self, messages: list[dict], model: str, out: queue.Queue):
@@ -37,11 +32,10 @@ class LocalProvider(Provider):
         except Exception as e:
             out.put(("error", e))
 
-    def stream(self, messages: list[dict], model: str, reasoning_effort: str = "none") -> Iterator[str]:
+    def _do_stream(self, messages: list[dict], model: str, reasoning_effort: str) -> Iterator[str]:
         # reasoning_effort accepted for interface compatibility, currently
         # unused — the standard /v1/chat/completions shape most local
-        # servers expose has no equivalent parameter. Wiring this properly
-        # would depend on which local server/model is actually running.
+        # servers expose has no equivalent parameter.
         logger.info(f"local call started (model={model}, {len(messages)} msgs)")
         q: queue.Queue = queue.Queue()
         t = threading.Thread(target=self._run, args=(messages, model, q), daemon=True)

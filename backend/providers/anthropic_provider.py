@@ -56,11 +56,10 @@ class AnthropicProvider(Provider):
                 elif kind == "error":
                     raise payload
 
-    def stream(self, messages: list[dict], model: str, reasoning_effort: str = "none") -> Iterator[str]:
+    def _do_stream(self, messages: list[dict], model: str, reasoning_effort: str) -> Iterator[str]:
             # reasoning_effort accepted for interface compatibility, currently
             # unused — Anthropic's equivalent (extended thinking / `thinking`
-            # budget) is a different shape entirely and wiring it properly is
-            # separate scope from tonight's OpenAI-specific change.
+            # budget) is a different shape entirely; separate scope.
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 logger.info(f"call started (model={model}, {len(messages)} msgs, attempt {attempt}/{MAX_ATTEMPTS})")
                 yielded_anything = False
@@ -77,16 +76,10 @@ class AnthropicProvider(Provider):
                     logger.info("retrying after transient failure...")
 
     def _run_tools(self, messages: list[dict], model: str, tools: list[dict], reasoning_effort: str, out: queue.Queue):
-            # reasoning_effort accepted but unused, same as stream() above.
-            #
-            # UNVERIFIED: assumes Anthropic's responses.create surface emits
-            # the same function-call event names as OpenAI's — response.
-            # output_item.added / response.function_call_arguments.delta /
-            # response.output_item.done — mirroring the same assumption the
-            # existing text-streaming code already makes for output_text.delta.
-            # That one's proven out in production; this one hasn't been
-            # exercised yet. Smoke-test against a real Anthropic key before
-            # trusting it.
+            # UNVERIFIED — assumes Anthropic's responses.create surface emits
+            # the same function-call event names as OpenAI's. supports_tools
+            # stays False until this is smoke-tested; dormant code, not
+            # currently reachable via stream_with_tools().
             try:
                 stream = self.client.responses.create(model=model, input=messages, tools=tools, stream=True)
                 pending: dict[str, dict] = {}
@@ -130,7 +123,7 @@ class AnthropicProvider(Provider):
                 elif kind == "error":
                     raise payload
 
-    def stream_with_tools(self, messages: list[dict], model: str, tools: list[dict], reasoning_effort: str = "none") -> Iterator[dict]:
+    def _do_stream_with_tools(self, messages: list[dict], model: str, tools: list[dict], reasoning_effort: str) -> Iterator[dict]:
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 logger.info(f"tool call started (model={model}, {len(messages)} msgs, {len(tools)} tools, attempt {attempt}/{MAX_ATTEMPTS})")
                 yielded_anything = False
