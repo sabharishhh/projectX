@@ -1,8 +1,9 @@
-import asyncio
 import logging
 import threading
 
 from crawl4ai import AsyncWebCrawler
+
+from background_loop import BackgroundEventLoop
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("extraction")
@@ -18,36 +19,27 @@ class _CrawlerManager:
     instead of silently taking down every subsequent extraction."""
 
     def __init__(self):
-        self._loop = asyncio.new_event_loop()
-        threading.Thread(target=self._loop.run_forever, daemon=True).start()
+        self._bg = BackgroundEventLoop()
         self._crawler: AsyncWebCrawler | None = None
         self._lock = threading.Lock()
-
-    def _run(self, coro, timeout: float | None = None):
-        fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        try:
-            return fut.result(timeout=timeout)
-        except TimeoutError:
-            fut.cancel()
-            raise
 
     def start(self):
         async def _do():
             crawler = AsyncWebCrawler()
             await crawler.start()
             return crawler
-        self._crawler = self._run(_do())
+        self._crawler = self._bg.run(_do())
         logger.info("crawler started")
 
     def close(self):
         if self._crawler is None:
             return
         try:
-            self._run(self._crawler.close(), timeout=10.0)
+            self._bg.run(self._crawler.close(), timeout=10.0)
         except Exception as e:
             logger.warning(f"crawler close failed: {e!r}")
         self._crawler = None
-        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._bg.stop()
 
     def _respawn(self):
         with self._lock:
@@ -55,7 +47,7 @@ class _CrawlerManager:
             old, self._crawler = self._crawler, None
             if old is not None:
                 try:
-                    self._run(old.close(), timeout=5.0)
+                    self._bg.run(old.close(), timeout=5.0)
                 except Exception:
                     pass  # already dead — that's why we're here
             self.start()
@@ -71,7 +63,7 @@ class _CrawlerManager:
                 if result.success and result.markdown:
                     return result.markdown.fit_markdown or result.markdown.raw_markdown
                 return None
-            return self._run(_do(), timeout=CRAWL_TIMEOUT_SECONDS)
+            return self._bg.run(_do(), timeout=CRAWL_TIMEOUT_SECONDS)
         except Exception as e:
             logger.warning(f"crawl failed for {url}: {e!r}")
             self._respawn()
