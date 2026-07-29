@@ -33,25 +33,19 @@ def _run_summarization(provider, conversation_id: str, history: list[dict], mess
             history + [{"role": "user", "content": message}, {"role": "assistant", "content": full_response}],
         )
     except Exception as e:
-        # background task — must never surface as a crash the user sees;
-        # worst case a summary update is silently skipped this turn
         chatlog.logger.warning(f"background summarization failed: {e!r}") if hasattr(chatlog, "logger") else None
 
 
-def stream_chat(conversation_id: str, message: str):
-    """Generator yielding SSE-formatted strings for one chat turn: memory
-    injection, skill selection, optional search, the streamed reply, then
-    capture (facts, conflicts, forget requests)."""
-    history = load_messages(conversation_id)
-    save_message(conversation_id, "user", message)
+# --- Phase: classification ---
 
-    # Skill-selection and search-decision are both independent LLM
-    # classifications of the same message — neither reads the other's
-    # output — so they run concurrently instead of one after another.
-    # search_decision fires unconditionally here and gets discarded below
-    # if the resolved skill turns out to disallow web_search (e.g. the
-    # "writing" skill's deny-all tools list) — a small, occasional wasted
-    # call traded for latency on every other turn.
+def _classify(message: str) -> tuple[dict | None, dict | None]:
+    """Skill-selection and search-decision are both independent LLM
+    classifications of the same message — neither reads the other's
+    output — so they run concurrently instead of one after another.
+    search_decision fires unconditionally and gets discarded here if the
+    resolved skill turns out to disallow web_search (e.g. the "writing"
+    skill's deny-all tools list) — a small, occasional wasted call traded
+    for latency on every other turn."""
     with ThreadPoolExecutor(max_workers=2) as pool:
         skill_future = pool.submit(skill_registry.select, provider, message)
         search_decision_future = pool.submit(search_decision_module.should_search, provider, message)
@@ -61,34 +55,31 @@ def stream_chat(conversation_id: str, message: str):
     if not skill_registry.allows(skill, "web_search"):
         search_decision = None
 
-    existing_branches = fetch_branches()
-    allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
+    return skill, search_decision
 
-    # Always read across every branch — domain classification still decides
-    # where a new fact gets *written* (capture routes work/personal/main per
-    # fact), but it no longer gates what can be *read back*. A per-turn domain
-    # guess was silently hiding whole categories of real, stored memory whenever
-    # it guessed wrong or a question didn't clearly belong to one domain.
-    # Retrieval scoring (relevance + recency + pinned set) now decides what's
-    # worth injecting, instead of a folder-like filter deciding it first.
-    # Each branch's fetch_state call is independent of the others, so they
-    # fire concurrently rather than one after another — results are then
-    # reassembled in allowed_branches order (not completion order) so
-    # behavior stays deterministic regardless of which branch responds first.
+
+# --- Phase: memory gathering ---
+
+def _fetch_known(allowed_branches: list[str]) -> list[dict]:
+    """Always read across every branch — domain classification still
+    decides where a new fact gets *written*, but no longer gates what can
+    be *read back*. Each branch's fetch_state call is independent, so
+    they fire concurrently — results are reassembled in allowed_branches
+    order (not completion order) so behavior stays deterministic
+    regardless of which branch responds first."""
     with ThreadPoolExecutor(max_workers=max(len(allowed_branches), 1)) as pool:
         state_futures = {b: pool.submit(fetch_state, b) for b in allowed_branches}
-        known = [{**u, "branch": b} for b in allowed_branches for u in state_futures[b].result()]
+        return [{**u, "branch": b} for b in allowed_branches for u in state_futures[b].result()]
 
-    forget_matches = forgetting.detect_forget_request(provider, message, known, allowed_branches)
 
-    # Same concurrency treatment for the relevance-scored fetch per branch.
-    # Iterating the results in allowed_branches order afterward (not
-    # completion order) matters here specifically: when the same hash
-    # appears in more than one branch's results, `seen` lets only the
-    # first-encountered one through, and "first" needs to mean "first in
-    # allowed_branches order," not "whichever thread happened to finish
-    # first" — otherwise which branch a duplicate gets credited to would
-    # be nondeterministic between runs.
+def _fetch_relevant(message: str, skill: dict | None, allowed_branches: list[str]) -> tuple[list[dict], dict]:
+    """Same concurrency treatment as _fetch_known. Iterating results in
+    allowed_branches order afterward (not completion order) matters
+    specifically for the dedup: when the same hash appears in more than
+    one branch's results, `seen` lets only the first-encountered one
+    through, and "first" needs to mean "first in allowed_branches order,"
+    not "whichever thread finished first" — otherwise which branch a
+    duplicate gets credited to would be nondeterministic between runs."""
     seen, all_candidates = set(), []
     per_branch_debug = {}
     with ThreadPoolExecutor(max_workers=max(len(allowed_branches), 1)) as pool:
@@ -111,26 +102,15 @@ def stream_chat(conversation_id: str, message: str):
                     all_candidates.append({**u, "branch": b})
 
     all_candidates.sort(key=lambda u: u["score"], reverse=True)
-    injected = all_candidates[:12]
+    return all_candidates[:12], per_branch_debug
 
-    save_retrieval_trace(conversation_id, message, {
-        "allowed_branches": allowed_branches,
-        "per_branch": per_branch_debug,
-        "merged_top12": [
-            {"hash": u["hash"][:8], "content": u["content"], "score": u["score"], "branch": u["branch"]}
-            for u in injected
-        ],
-    })
 
-    # Windowed history + rolling summary, replacing full unwindowed history.
-    # `skill` and `injected` are both resolved by this point.
-    visible_history = history[-summarization.WINDOW_MESSAGES:]
-    summary = summarization.get_current_summary(conversation_id)
+# --- Phase: conversation assembly ---
 
-    forget_context = None
+def _build_forget_context(forget_matches: list[dict], message: str) -> dict | None:
     if forget_matches:
         matched = "; ".join(f'"{m["unit"]["content"]}"' for m in forget_matches)
-        forget_context = {
+        return {
             "role": "system",
             "content": (
                 f"The user's message matches a stored fact you can forget: {matched}. "
@@ -138,8 +118,8 @@ def stream_chat(conversation_id: str, message: str):
                 "specifically and naturally. Do not say you're unable to forget or delete memory."
             ),
         }
-    elif forgetting.mentions_forgetting(message):
-        forget_context = {
+    if forgetting.mentions_forgetting(message):
+        return {
             "role": "system",
             "content": (
                 "The user's message sounds like a request to forget something, but no "
@@ -149,37 +129,41 @@ def stream_chat(conversation_id: str, message: str):
                 "or ask them to clarify."
             ),
         }
+    return None
 
-    conversation = [build_system_message(injected, (skill or {}).get("system_prompt"))] \
+
+def _build_conversation(conversation_id: str, message: str, skill: dict | None,
+                         injected: list[dict], forget_matches: list[dict],
+                         history: list[dict]) -> list[dict]:
+    """Windowed history + rolling summary, replacing full unwindowed history."""
+    visible_history = history[-summarization.WINDOW_MESSAGES:]
+    summary = summarization.get_current_summary(conversation_id)
+    forget_context = _build_forget_context(forget_matches, message)
+
+    return [build_system_message(injected, (skill or {}).get("system_prompt"))] \
         + ([{"role": "system", "content": f"Summary of earlier conversation:\n{summary}"}] if summary else []) \
         + ([forget_context] if forget_context else []) \
         + to_provider_messages(visible_history) \
         + [{"role": "user", "content": message}]
 
-    ledger.log("provider_call", f"model={model}", conversation_id, actor="user")
-    if skill:
-        ledger.log("skill_invoked", f"{skill['name']}: {message[:60]}", conversation_id, actor="system")
 
-    activity_log = []
+# --- Phase: reply generation ---
 
-    if skill:
-        ev = {"kind": "skill", "label": f"{skill['name']}ing"}
-        activity_log.append(ev)
-        yield _sse({"type": "activity", "event": ev})
+def _generate_reply(conversation_id: str, conversation: list[dict], skill: dict | None,
+                     search_decision: dict | None, activity_log: list[dict]):
+    """Every branch converges on agentic_search — no separate fixed
+    pipeline to route between. web_search/web_fetch are available
+    whenever search_decision found a real need; memory_search is
+    available whenever the skill allows it, independent of that.
 
-    if injected:
-        ev = {
-            "kind": "memory_read",
-            "label": f"Recalled {len(injected)} {'fact' if len(injected) == 1 else 'facts'}",
-            "units": injected,
-        }
-        activity_log.append(ev)
-        yield _sse({"type": "activity", "event": ev})
+    Yields the same SSE-ready dicts stream_chat already streams; mutates
+    activity_log in place, same convention every phase here uses.
 
-    # Every branch now converges on agentic_search — there's no separate
-    # fixed pipeline to route between anymore. web_search/web_fetch are
-    # available whenever search_decision found a real need; memory_search
-    # is available whenever the skill allows it, independent of that.
+    Returns (full_response, errored) via the generator's return value.
+    errored=True means an error was already yielded and the caller must
+    stop the turn immediately — matching the original behavior exactly:
+    on a reply-generation error, capture/conflict/forget/persistence/done
+    are all skipped, not just the reply itself."""
     memory_allowed = skill_registry.allows(skill, "memory_search")
     web_needed = search_decision is not None and skill_registry.allows(skill, "web_fetch")
 
@@ -190,7 +174,6 @@ def stream_chat(conversation_id: str, message: str):
         allowed_tools.update({"web_search", "web_fetch"})
 
     use_agentic = provider.supports_tools and bool(allowed_tools)
-
     full_response = ""
 
     if use_agentic:
@@ -205,7 +188,7 @@ def stream_chat(conversation_id: str, message: str):
                     activity_log.append(event["event"])
         except Exception as e:
             yield _sse({"type": "error", "message": str(e)})
-            return
+            return full_response, True
     else:
         # Reached only when the provider can't do tool calling at all (or
         # no tools are applicable this turn) — a search need with no way
@@ -224,14 +207,25 @@ def stream_chat(conversation_id: str, message: str):
                 yield _sse({"type": "text", "value": chunk})
         except Exception as e:
             yield _sse({"type": "error", "message": str(e)})
-            return
+            return full_response, True
 
-    # Forget requests are detected BEFORE capture now, not after. Capture has
-    # no way to honor its own "don't create a unit describing a forget
-    # request" rule if it runs first without knowing this message is one —
-    # that's exactly what produced a bogus "user wants X forgotten" memory
-    # unit in testing. Skipping capture entirely on a forget-request turn is
-    # the deterministic fix; relying on the model to self-censor was not.
+    return full_response, False
+
+
+# --- Phase: capture (facts + conflicts) ---
+
+def _process_capture(conversation_id: str, message: str, full_response: str,
+                      known: list[dict], allowed_branches: list[str],
+                      forget_matches: list[dict], activity_log: list[dict]):
+    """Forget requests are detected BEFORE this runs, not after — capture
+    can't honor its own "don't create a unit describing a forget request"
+    rule if it runs first without knowing this message is one. Skipping
+    capture entirely on a forget-matched turn is the deterministic fix;
+    relying on the model to self-censor was not.
+
+    Yields memory_write/conflict SSE activity events, mutates
+    activity_log. Returns the conflicts list — the caller needs it to
+    build conflicted_hashes for the forget-processing phase after this."""
     units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches)
     added, conflicts = [], []
 
@@ -281,10 +275,17 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
-    # forget_matches was already computed above, before capture ran — reused
-    # here, not recomputed. conflicted_hashes still guards against
-    # double-prompting when a message both matches a forget AND capture
-    # flagged a conflict on a different, unrelated fact in the same turn.
+    return conflicts
+
+
+# --- Phase: forget-request surfacing ---
+
+def _process_forgets(conversation_id: str, forget_matches: list[dict],
+                      conflicts: list[dict], activity_log: list[dict]):
+    """forget_matches was already computed earlier, before capture ran —
+    reused here, not recomputed. conflicted_hashes guards against
+    double-prompting when a message both matches a forget AND capture
+    flagged a conflict on a different, unrelated fact in the same turn."""
     conflicted_hashes = {c["old"]["hash"] for c in conflicts}
     for m in forget_matches:
         if m["unit"]["hash"] in conflicted_hashes:
@@ -306,6 +307,70 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
         ledger.log("forget_requested", f"candidate: {m['unit']['content']}", conversation_id, actor="system")
+
+
+# --- Orchestration ---
+
+def stream_chat(conversation_id: str, message: str):
+    """Generator yielding SSE-formatted strings for one chat turn: memory
+    injection, skill selection, optional search, the streamed reply, then
+    capture (facts, conflicts, forget requests). Each phase above is a
+    focused function; this orchestrator sequences them and owns the
+    state that carries between phases — same behavior as before the
+    split, just no longer one ~300-line function."""
+    history = load_messages(conversation_id)
+    save_message(conversation_id, "user", message)
+
+    skill, search_decision = _classify(message)
+
+    existing_branches = fetch_branches()
+    allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
+
+    known = _fetch_known(allowed_branches)
+    forget_matches = forgetting.detect_forget_request(provider, message, known, allowed_branches)
+    injected, per_branch_debug = _fetch_relevant(message, skill, allowed_branches)
+
+    save_retrieval_trace(conversation_id, message, {
+        "allowed_branches": allowed_branches,
+        "per_branch": per_branch_debug,
+        "merged_top12": [
+            {"hash": u["hash"][:8], "content": u["content"], "score": u["score"], "branch": u["branch"]}
+            for u in injected
+        ],
+    })
+
+    conversation = _build_conversation(conversation_id, message, skill, injected, forget_matches, history)
+
+    ledger.log("provider_call", f"model={model}", conversation_id, actor="user")
+    if skill:
+        ledger.log("skill_invoked", f"{skill['name']}: {message[:60]}", conversation_id, actor="system")
+
+    activity_log = []
+
+    if skill:
+        ev = {"kind": "skill", "label": f"{skill['name']}ing"}
+        activity_log.append(ev)
+        yield _sse({"type": "activity", "event": ev})
+
+    if injected:
+        ev = {
+            "kind": "memory_read",
+            "label": f"Recalled {len(injected)} {'fact' if len(injected) == 1 else 'facts'}",
+            "units": injected,
+        }
+        activity_log.append(ev)
+        yield _sse({"type": "activity", "event": ev})
+
+    full_response, errored = yield from _generate_reply(
+        conversation_id, conversation, skill, search_decision, activity_log,
+    )
+    if errored:
+        return
+
+    conflicts = yield from _process_capture(
+        conversation_id, message, full_response, known, allowed_branches, forget_matches, activity_log,
+    )
+    yield from _process_forgets(conversation_id, forget_matches, conflicts, activity_log)
 
     persisted_activity = [a for a in activity_log if a["kind"] != "skill"]
     save_message(conversation_id, "assistant", full_response, persisted_activity)
