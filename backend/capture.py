@@ -4,14 +4,13 @@ import httpx
 import logging
 
 from state import CAPTURE_MODEL
+from memory_client import client
 from memory import invalidate_state_cache
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("capture")
 
-MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 CAPTURE_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.4-mini")
-REQUEST_TIMEOUT = 20.0  # matches memory.py — covers a cold/paged-out engine load
 
 CAPTURE_PROMPT = """You extract durable facts about the user from a conversation turn.
 
@@ -102,8 +101,8 @@ def extract_units(provider, user_message: str, assistant_message: str,
 
 def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
     try:
-        r = httpx.post(
-            f"{MEMORY_URL}/remember",
+        r = client.post(
+            f"/remember",
             json={
                 "content": unit["content"],
                 "unit_type": unit["unit_type"],
@@ -112,7 +111,6 @@ def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
                 "summary": unit.get("summary", unit["content"]),
                 "branch": branch,
             },
-            timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
         invalidate_state_cache(branch)
@@ -123,8 +121,8 @@ def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
 
 def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main") -> bool:
     try:
-        r = httpx.post(
-            f"{MEMORY_URL}/supersede",
+        r = client.post(
+            f"/supersede",
             json={
                 "from": from_hash,
                 "content": unit["content"],
@@ -134,7 +132,6 @@ def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main"
                 "summary": unit.get("summary", unit["content"]),
                 "branch": branch,
             },
-            timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
         invalidate_state_cache(branch)
@@ -146,10 +143,9 @@ def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main"
 def forget_unit(unit_hash: str, source: str, branch: str, summary: str) -> bool:
     """Soft-forget: drops the unit from HEAD, keeps it in history."""
     try:
-        r = httpx.post(
-            f"{MEMORY_URL}/forget",
+        r = client.post(
+            f"/forget",
             json={"hash": unit_hash, "source": source, "summary": summary, "branch": branch},
-            timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
         invalidate_state_cache(branch)
@@ -163,7 +159,7 @@ def purge_unit(unit_hash: str) -> bool:
     """Hard-delete: the unit's content is genuinely removed from disk.
     Callers must have already soft-forgotten the unit first."""
     try:
-        r = httpx.post(f"{MEMORY_URL}/purge", json={"hash": unit_hash}, timeout=REQUEST_TIMEOUT)
+        r = client.post(f"/purge", json={"hash": unit_hash})
         r.raise_for_status()
         return True
     except Exception as e:

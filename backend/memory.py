@@ -3,6 +3,8 @@ import time
 import httpx
 import logging
 
+from memory_client import client
+
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("memory")
 
@@ -40,7 +42,7 @@ def fetch_state(branch: str = "main") -> list[dict]:
     if cached and (time.monotonic() - cached[1]) < CACHE_TTL_SECONDS:
         return list(cached[0])
     try:
-        r = httpx.get(f"{MEMORY_URL}/state", params={"branch": branch}, timeout=REQUEST_TIMEOUT)
+        r = client.get("/state", params={"branch": branch})
         r.raise_for_status()
         units = r.json()
         _state_cache[branch] = (units, time.monotonic())

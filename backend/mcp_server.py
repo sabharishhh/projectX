@@ -8,14 +8,15 @@ loosening of any individual tool's constraints."""
 import json
 import os
 import httpx
+
+import extraction
+import search as discovery
+from memory_client import client
 from mcp.server.fastmcp import FastMCP
 
-import search as discovery
-import extraction
 
 mcp = FastMCP("projectx-tools")
 MAX_FETCH_CHARS = 8000
-MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 
 NOT_EXTRACTED_PREFIX = "Could not extract content from"
 
@@ -41,7 +42,7 @@ def memory_search(pattern: str, branch: str = "main") -> str:
     scoped to currently-active memory in one branch. Does not search
     forgotten/superseded facts."""
     try:
-        r = httpx.get(f"{MEMORY_URL}/search", params={"pattern": pattern, "branch": branch}, timeout=10.0)
+        r = client.get(f"/search", params={"pattern": pattern, "branch": branch})
         r.raise_for_status()
         results = r.json()
     except Exception as e:

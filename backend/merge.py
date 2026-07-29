@@ -1,9 +1,8 @@
 import json
 import httpx
 
+from memory_client import client
 from memory import invalidate_state_cache
-
-MEMORY_URL = "http://127.0.0.1:8100"
 
 MERGE_COMPARE_PROMPT = """Compare two sets of memory facts about the same person —
 one from branch "{from_branch}", one from branch "{into_branch}".
@@ -25,11 +24,7 @@ Return {{"conflicts": []}} if nothing conflicts."""
 
 
 def preview(from_branch: str, into_branch: str) -> dict:
-    r = httpx.get(
-        f"{MEMORY_URL}/merge/preview",
-        params={"from": from_branch, "into": into_branch},
-        timeout=5.0,
-    )
+    r = client.get("/merge/preview", params={"from": from_branch, "into": into_branch})
     r.raise_for_status()
     return r.json()
 
@@ -73,15 +68,11 @@ def find_conflicts(provider, from_branch: str, into_branch: str,
 
 def apply(from_branch: str, into_branch: str, adopt: list[str],
           replace: list[dict], source: str, summary: str) -> dict:
-    r = httpx.post(
-        f"{MEMORY_URL}/merge/apply",
-        json={
-            "from": from_branch, "into": into_branch,
-            "adopt": adopt, "replace": replace,
-            "source": source, "summary": summary,
-        },
-        timeout=5.0,
-    )
+    r = client.post("/merge/apply", json={
+        "from": from_branch, "into": into_branch,
+        "adopt": adopt, "replace": replace,
+        "source": source, "summary": summary,
+    })
     r.raise_for_status()
     invalidate_state_cache(into_branch)
     return r.json()
