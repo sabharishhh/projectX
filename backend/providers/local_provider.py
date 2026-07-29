@@ -1,11 +1,9 @@
 import logging
-import queue
-import threading
-import time
 from typing import Iterator
 
 from openai import OpenAI
 from .base import Provider
+from ._harness import run_worker
 
 logger = logging.getLogger("provider")
 
@@ -21,7 +19,7 @@ class LocalProvider(Provider):
     def __init__(self, base_url: str):
         self.client = OpenAI(api_key="local", base_url=base_url, timeout=HARD_DEADLINE_SECONDS)
 
-    def _run(self, messages: list[dict], model: str, out: queue.Queue):
+    def _worker(self, messages, model, out):
         try:
             stream = self.client.chat.completions.create(model=model, messages=messages, stream=True)
             for chunk in stream:
@@ -36,25 +34,19 @@ class LocalProvider(Provider):
         # reasoning_effort accepted for interface compatibility, currently
         # unused — the standard /v1/chat/completions shape most local
         # servers expose has no equivalent parameter.
+        #
+        # Deliberately NOT using with_retry — local's current behavior is a
+        # single attempt, no retry. This refactor dedupes identical code,
+        # it doesn't add new retry behavior to a provider that never had
+        # it — that'd be a real decision to make explicitly, not a side
+        # effect of cleanup.
         logger.info(f"local call started (model={model}, {len(messages)} msgs)")
-        q: queue.Queue = queue.Queue()
-        t = threading.Thread(target=self._run, args=(messages, model, q), daemon=True)
-        t.start()
-
-        deadline = time.monotonic() + HARD_DEADLINE_SECONDS
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"local provider call exceeded {HARD_DEADLINE_SECONDS}s hard deadline")
-            try:
-                kind, payload = q.get(timeout=remaining)
-            except queue.Empty:
-                continue
-            if kind == "chunk":
-                yield payload
-            elif kind == "done":
-                logger.info("local call completed")
-                return
-            elif kind == "error":
-                logger.warning(f"local call failed: {payload!r}")
-                raise payload
+        try:
+            yield from run_worker(
+                lambda out: self._worker(messages, model, out),
+                HARD_DEADLINE_SECONDS, "local provider call",
+            )
+            logger.info("local call completed")
+        except Exception as e:
+            logger.warning(f"local call failed: {e!r}")
+            raise
