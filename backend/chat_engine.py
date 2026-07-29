@@ -5,12 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 import ledger
 import chatlog
 import branching
+import threading
 import forgetting
 import summarization
 import agentic_search
 import skills as skill_registry
 
-import fixed_search
 import search_decision as search_decision_module
 from capture import extract_units, commit_unit
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message
@@ -20,6 +20,22 @@ from state import provider, model, PENDING, PENDING_FORGETS, MAIN_REASONING_EFFO
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
+
+
+def _run_summarization(provider, conversation_id: str, history: list[dict], message: str, full_response: str):
+    """Runs after the SSE stream has already closed — summarization has no
+    live activity card, so deferring it changes nothing the user sees,
+    only removes its LLM call (on the turns it actually fires) from the
+    critical path the user waits through."""
+    try:
+        summarization.maybe_update_summary(
+            provider, conversation_id,
+            history + [{"role": "user", "content": message}, {"role": "assistant", "content": full_response}],
+        )
+    except Exception as e:
+        # background task — must never surface as a crash the user sees;
+        # worst case a summary update is silently skipped this turn
+        chatlog.logger.warning(f"background summarization failed: {e!r}") if hasattr(chatlog, "logger") else None
 
 
 def stream_chat(conversation_id: str, message: str):
@@ -147,7 +163,7 @@ def stream_chat(conversation_id: str, message: str):
     activity_log = []
 
     if skill:
-        ev = {"kind": "skill", "label": f"Using {skill['name']} skill"}
+        ev = {"kind": "skill", "label": f"{skill['name']}ing"}
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
@@ -160,31 +176,20 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
+    # Every branch now converges on agentic_search — there's no separate
+    # fixed pipeline to route between anymore. web_search/web_fetch are
+    # available whenever search_decision found a real need; memory_search
+    # is available whenever the skill allows it, independent of that.
     memory_allowed = skill_registry.allows(skill, "memory_search")
-    web_iterative = (
-        search_decision is not None
-        and search_decision["complexity"] == "iterative"
-        and skill_registry.allows(skill, "web_fetch")
-    )
-    # True whenever there's a real web-search need that ISN'T being handled
-    # iteratively — i.e. "simple" complexity, or web_fetch isn't allowed for
-    # this skill. This case must always go to fixed_search below, even when
-    # memory_search also happens to be available — otherwise memory_search's
-    # near-universal availability silently swallows every simple web query
-    # into a tool loop that, without web tools attached, can't answer it.
-    web_needs_fixed_pipeline = search_decision is not None and not web_iterative
+    web_needed = search_decision is not None and skill_registry.allows(skill, "web_fetch")
 
     allowed_tools = set()
     if memory_allowed:
         allowed_tools.add("memory_search")
-    if web_iterative:
+    if web_needed:
         allowed_tools.update({"web_search", "web_fetch"})
 
-    use_agentic = (
-        provider.supports_tools
-        and bool(allowed_tools)
-        and not web_needs_fixed_pipeline
-    )
+    use_agentic = provider.supports_tools and bool(allowed_tools)
 
     full_response = ""
 
@@ -202,30 +207,16 @@ def stream_chat(conversation_id: str, message: str):
             yield _sse({"type": "error", "message": str(e)})
             return
     else:
+        # Reached only when the provider can't do tool calling at all (or
+        # no tools are applicable this turn) — a search need with no way
+        # to act on it agentic-ly. Surface that plainly rather than
+        # silently answering as if no search was needed.
         if search_decision:
-            query = search_decision["query"]
-            yield _sse({"type": "activity", "event": {"kind": "searching", "label": f"Searching: {query}"}})
-            distilled = fixed_search.research(provider, query)
-            if distilled:
-                ev = {
-                    "kind": "search",
-                    "label": f"Read {len(distilled)} page{'s' if len(distilled) != 1 else ''}: {query}",
-                    "results": distilled,
-                }
-                activity_log.append(ev)
-                yield _sse({"type": "activity", "event": ev})
-                conversation.append({
-                    "role": "system",
-                    "content": fixed_search.format_for_context(query, distilled),
-                })
-                ledger.log("search_call", f"{query} ({len(distilled)} pages read)",
-                           conversation_id, actor="system")
-            else:
-                ev = {"kind": "search_failed", "label": f"Searched, but couldn't read any results: {query}"}
-                activity_log.append(ev)
-                yield _sse({"type": "activity", "event": ev})
-                ledger.log("search_call", f"{query} (0 pages read — extraction failed)",
-                           conversation_id, actor="system")
+            ev = {"kind": "search_failed", "label": f"Couldn't search — no tool-calling support available: {search_decision['query']}"}
+            activity_log.append(ev)
+            yield _sse({"type": "activity", "event": ev})
+            ledger.log("search_call", f"{search_decision['query']} (0 pages read — no tool support)",
+                       conversation_id, actor="system")
 
         try:
             for chunk in provider.stream(conversation, model, reasoning_effort=MAIN_REASONING_EFFORT):
@@ -319,13 +310,20 @@ def stream_chat(conversation_id: str, message: str):
     persisted_activity = [a for a in activity_log if a["kind"] != "skill"]
     save_message(conversation_id, "assistant", full_response, persisted_activity)
 
-    # Fold aged-out messages into the rolling summary, now that this turn's
-    # user message and full reply both exist. No-ops cheaply unless enough
-    # new messages have crossed the visible-window boundary.
-    summarization.maybe_update_summary(
-        provider, conversation_id,
-        history + [{"role": "user", "content": message}, {"role": "assistant", "content": full_response}],
-    )
-
     chatlog.log_turn(conversation_id, message, skill, injected, activity_log, full_response)
     yield _sse({"type": "done"})
+
+    # Deferred until after "done" — summarization has no live activity card
+    # (maybe_update_summary never yields one), so nothing the user sees
+    # depends on this finishing before the stream closes. It only fires on
+    # turns where enough messages have aged past the visible window
+    # (TRIGGER_BUFFER), so this is a no-op most turns; on the turns it does
+    # fire, this removes a full extra LLM call from the user's wait time.
+    # Fire-and-forget from a plain sync generator (no asyncio.create_task
+    # available here) — a daemon thread, since the request/response cycle
+    # is already fully done by this point and nothing needs to join it.
+    threading.Thread(
+        target=_run_summarization,
+        args=(provider, conversation_id, history, message, full_response),
+        daemon=True,
+    ).start()

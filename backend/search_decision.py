@@ -1,7 +1,8 @@
 """The one gate every turn passes through: does this message need a web
-search, and if so, does it need one lookup or several? Used regardless of
-which skill (if any) is active, and regardless of which search path
-(fixed_search.py or agentic_search.py) ends up handling it."""
+search at all? Used regardless of which skill (if any) is active. All
+searches now route through agentic_search.py — there's no separate fixed
+pipeline to route between, so this no longer classifies query complexity,
+only whether a search is needed and what to search for."""
 
 import json
 import logging
@@ -20,19 +21,10 @@ Say yes if either is true:
   Trust the user's actual request even if the topic itself seems like something
   you'd already know.
 
-If search is needed, also judge how complex the lookup is:
-- "simple": one clear fact, likely answered directly by a top search result
-  (e.g. "what's the weather in X", "what's the latest version of Y").
-- "iterative": genuine ambiguity to resolve (e.g. vague dates like "last
-  weekend"), multiple entities to compare, or an answer that needs
-  cross-referencing more than one source to trust.
-
 Answer with JSON only:
-{"search": true, "query": "concise search query", "complexity": "simple"}
+{"search": true, "query": "concise search query"}
 or
-{"search": true, "query": "concise search query", "complexity": "iterative"}
-or
-{"search": false, "query": null, "complexity": null}
+{"search": false, "query": null}
 
 Do NOT search for: general knowledge, definitions, coding help, writing tasks,
 math, opinions, or anything about the user themselves — unless the user
@@ -43,9 +35,8 @@ SEARCH_DECISION_SCHEMA = {
     "properties": {
         "search": {"type": "boolean"},
         "query": {"type": ["string", "null"]},
-        "complexity": {"type": ["string", "null"], "enum": ["simple", "iterative", None]},
     },
-    "required": ["search", "query", "complexity"],
+    "required": ["search", "query"],
     "additionalProperties": False,
 }
 
@@ -58,7 +49,7 @@ def _call(provider, system: str, user: str) -> str:
 
 
 def should_search(provider, message: str) -> dict | None:
-    """Returns {"query": str, "complexity": "simple"|"iterative"} or None."""
+    """Returns {"query": str} or None."""
     if provider.supports_structured_output:
         try:
             result = provider.complete_json(
@@ -71,7 +62,7 @@ def should_search(provider, message: str) -> dict | None:
             logger.info(f"should_search (structured): message={message!r} result={result}")
             if not result.get("search"):
                 return None
-            return {"query": result["query"], "complexity": result.get("complexity") or "simple"}
+            return {"query": result["query"]}
         except Exception as e:
             logger.warning(f"should_search (structured) failed: {e!r}")
             return None
@@ -82,7 +73,7 @@ def should_search(provider, message: str) -> dict | None:
         logger.info(f"should_search (unstructured): message={message!r} raw={raw!r} parsed={parsed}")
         if not parsed.get("search"):
             return None
-        return {"query": parsed["query"], "complexity": parsed.get("complexity") or "simple"}
+        return {"query": parsed["query"]}
     except Exception as e:
         logger.warning(f"should_search (unstructured) failed: {e!r}")
         return None

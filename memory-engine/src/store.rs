@@ -16,6 +16,8 @@ pub enum StoreError {
     Io(io::Error),
     Serde(serde_json::Error),
     Regex(regex::Error),
+    Corrupted(String, String), // (expected_hash, actual_hash) — content read from
+    // a hash-addressed path no longer matches that hash
 }
 
 impl From<io::Error> for StoreError {
@@ -39,6 +41,15 @@ pub fn valid_branch_name(name: &str) -> bool {
         && name.len() <= 64
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
+
+// How many commits state_at() will replay from the nearest checkpoint (or
+// genesis, if none exists yet) before a fresh checkpoint gets written.
+// Keeps state resolution's worst case bounded regardless of how much total
+// history accumulates over time — without this, state_at() replays the
+// entire commit history from the beginning on every single call, which
+// only gets slower as a personal memory store does what it's meant to do:
+// accumulate history over months or years.
+const CHECKPOINT_INTERVAL: usize = 20;
 
 pub struct MemoryStore {
     root: PathBuf,
@@ -105,10 +116,14 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Writes a commit and moves the given branch's HEAD to it.
+    /// Writes a commit and moves the given branch's HEAD to it. Also checks
+    /// whether this commit is due for a checkpoint (see maybe_checkpoint) —
+    /// keeps state_at()'s replay bounded as history grows, transparently,
+    /// with no change to this method's callers or return value.
     pub fn commit(&self, branch: &str, commit: &Commit) -> Result<String, StoreError> {
         let hash = self.put_commit(commit)?;
         self.set_head(branch, &hash)?;
+        self.maybe_checkpoint(&hash)?;
         Ok(hash)
     }
 
@@ -133,14 +148,83 @@ impl MemoryStore {
         self.path_for(hash).exists()
     }
 
+    // --- checkpointing ---
+
+    fn checkpoint_path(&self, commit_hash: &str) -> PathBuf {
+        self.root.join("checkpoints").join(commit_hash)
+    }
+
+    fn load_checkpoint(&self, commit_hash: &str) -> Result<Option<Vec<String>>, StoreError> {
+        match fs::read(self.checkpoint_path(commit_hash)) {
+            Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn save_checkpoint(&self, commit_hash: &str, live: &[String]) -> Result<(), StoreError> {
+        let path = self.checkpoint_path(commit_hash);
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(path, serde_json::to_vec(live)?)?;
+        Ok(())
+    }
+
+    /// Walks backward at most CHECKPOINT_INTERVAL commits from `commit_hash`,
+    /// looking for an existing checkpoint. If one's found within range,
+    /// nothing to do. If genesis is reached first, the chain's still short
+    /// enough that a checkpoint wouldn't help yet. Only when the full
+    /// interval is walked without finding either does this commit get a
+    /// fresh checkpoint written — via state_at(), which at this point is
+    /// itself bounded to the same interval, so this stays cheap.
+    fn maybe_checkpoint(&self, commit_hash: &str) -> Result<(), StoreError> {
+        let mut cursor = Some(commit_hash.to_string());
+        let mut steps = 0;
+        loop {
+            let hash = match cursor {
+                Some(h) => h,
+                None => return Ok(()), // reached genesis within the interval
+            };
+            if self.checkpoint_path(&hash).exists() {
+                return Ok(()); // an earlier checkpoint is within range — not due yet
+            }
+            if steps >= CHECKPOINT_INTERVAL {
+                break;
+            }
+            let commit = self.get_commit(&hash)?;
+            cursor = commit.parent.clone();
+            steps += 1;
+        }
+        let live = self.state_at(commit_hash)?;
+        let hashes: Vec<String> = live.into_iter().map(|(h, _)| h).collect();
+        self.save_checkpoint(commit_hash, &hashes)?;
+        Ok(())
+    }
+
     // --- state resolution ---
 
-    /// Replays history oldest-first to produce the units live at `commit_hash`.
-    /// Branch-agnostic by design — it just walks parent pointers from
-    /// whatever commit it's given.
+    /// Resolves the units live at `commit_hash`. Walks backward from
+    /// `commit_hash` toward genesis, stopping early if a saved checkpoint
+    /// is found — replays forward from there instead of from the very
+    /// beginning of history every time. Falls back to a full replay from
+    /// genesis when no checkpoint exists yet (e.g. a short chain, or a
+    /// store predating checkpointing). Branch-agnostic by design — it just
+    /// walks parent pointers from whatever commit it's given.
     pub fn state_at(&self, commit_hash: &str) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
+        let mut stack: Vec<Commit> = Vec::new();
+        let mut cursor = Some(commit_hash.to_string());
         let mut live: Vec<String> = Vec::new();
-        for (_, commit) in self.history(commit_hash)?.into_iter().rev() {
+
+        while let Some(hash) = cursor {
+            if let Some(checkpoint) = self.load_checkpoint(&hash)? {
+                live = checkpoint;
+                break;
+            }
+            let commit = self.get_commit(&hash)?;
+            cursor = commit.parent.clone();
+            stack.push(commit);
+        }
+
+        for commit in stack.into_iter().rev() {
             for change in commit.changes {
                 match change {
                     UnitChange::Added { hash } => {
@@ -156,6 +240,7 @@ impl MemoryStore {
                 }
             }
         }
+
         live.into_iter().map(|h| self.get(&h).map(|u| (h, u))).collect()
     }
 
@@ -189,6 +274,11 @@ impl MemoryStore {
         if refs_dir.exists() {
             fs::remove_dir_all(&refs_dir)?;
         }
+
+        let checkpoints_dir = self.root.join("checkpoints");
+        if checkpoints_dir.exists() {
+            fs::remove_dir_all(&checkpoints_dir)?;
+        }
         Ok(())
     }
 
@@ -205,8 +295,17 @@ impl MemoryStore {
         Ok(hash)
     }
 
+    /// Re-hashes the bytes read from a hash-addressed path and confirms
+    /// they still match before deserializing — content-addressing without
+    /// this check is a guarantee in name only. Catches disk corruption, a
+    /// partial write from a crash mid-save, or manual tampering, instead
+    /// of silently deserializing whatever's actually on disk.
     fn get_object<T: DeserializeOwned>(&self, hash: &str) -> Result<T, StoreError> {
         let bytes = fs::read(self.path_for(hash))?;
+        let actual = hash_bytes(&bytes);
+        if actual != hash {
+            return Err(StoreError::Corrupted(hash.to_string(), actual));
+        }
         Ok(serde_json::from_slice(&bytes)?)
     }
 

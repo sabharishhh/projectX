@@ -11,7 +11,7 @@ MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 
 FORGET_TRIGGER_WORDS = (
     "forget", "remove", "delete", "erase", "unremember",
-    "stop remembering", "don't remember", "no longer", "drop memory", "drop memories"
+    "stop remembering", "don't remember", "no longer", "drop",
 )
 
 FORGET_PATTERN_PROMPT = """The user's message may be asking to forget one or

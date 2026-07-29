@@ -1,6 +1,7 @@
 import os
-import logging
+import time
 import httpx
+import logging
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("memory")
@@ -31,11 +32,19 @@ FORGET_CAPABILITY = (
     "claim you're unable to forget or delete something."
 )
 
+_state_cache: dict[str, tuple[list[dict], float]] = {}
+CACHE_TTL_SECONDS = 10.0
+
 def fetch_state(branch: str = "main") -> list[dict]:
+    cached = _state_cache.get(branch)
+    if cached and (time.monotonic() - cached[1]) < CACHE_TTL_SECONDS:
+        return list(cached[0])
     try:
         r = httpx.get(f"{MEMORY_URL}/state", params={"branch": branch}, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
-        return r.json()
+        units = r.json()
+        _state_cache[branch] = (units, time.monotonic())
+        return list(units)
     except Exception as e:
         logger.warning(f"fetch_state failed for branch={branch!r}: {e!r}")
         return []
@@ -52,6 +61,12 @@ def fetch_relevant(query: str, branch: str = "main", max_units: int = 12, boost_
     except Exception as e:
         logger.warning(f"fetch_relevant failed for branch={branch!r}: {e!r}")
         return []
+
+def invalidate_state_cache(branch: str) -> None:
+    """Call after any write that changes a branch's live state — commit,
+    supersede, or forget. fetch_state() re-fetches fresh on next call for
+    that branch only; other branches are untouched."""
+    _state_cache.pop(branch, None)
 
 def fetch_branches() -> list[str]:
     try:

@@ -50,14 +50,27 @@ def _collect_sources(activity_log: list[dict]) -> list[str]:
             urls.extend(r["url"] for r in a.get("results", []) if r.get("url"))
     return list(dict.fromkeys(urls))  # de-dupe, preserve first-fetched/first-listed order
 
-
 def log_turn(conversation_id: str, message: str, skill: dict | None,
              injected: list[dict], activity_log: list[dict], full_response: str) -> None:
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        path = LOG_DIR / f"{conversation_id}.md"
+        
+        now = datetime.now(timezone.utc)
+        
+        # 1. Search for an existing log file linked to this conversation ID
+        existing_files = list(LOG_DIR.glob(f"*_{conversation_id}.md"))
+        
+        if existing_files:
+            # If found, use the existing file (keeps appending to the same session)
+            path = existing_files[0]
+        else:
+            # If not found (first turn), create a new timestamped file
+            file_ts = now.strftime("%Y-%m-%d_%H-%M-%S")
+            path = LOG_DIR / f"{file_ts}_{conversation_id}.md"
 
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+        # 2. Format the standard timestamp for the markdown block header
+        ts = now.strftime("%Y-%m-%d %H:%M:%SZ")
+        
         skill_line = skill["name"] if skill else "none"
         recalled = ", ".join(u["content"] for u in injected[:5]) or "none"
         if len(injected) > 5:

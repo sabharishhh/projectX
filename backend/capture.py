@@ -1,9 +1,10 @@
-import json
 import os
+import json
+import httpx
 import logging
 
-import httpx
 from state import CAPTURE_MODEL
+from memory import invalidate_state_cache
 
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("capture")
@@ -114,6 +115,7 @@ def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
             timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
+        invalidate_state_cache(branch)
         return True
     except Exception as e:
         logger.warning(f"commit_unit failed for {unit.get('content', '')!r}: {e!r}")
@@ -135,6 +137,7 @@ def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main"
             timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
+        invalidate_state_cache(branch)
         return True
     except Exception as e:
         logger.warning(f"supersede_unit failed for {from_hash!r}: {e!r}")
@@ -149,6 +152,7 @@ def forget_unit(unit_hash: str, source: str, branch: str, summary: str) -> bool:
             timeout=REQUEST_TIMEOUT,
         )
         r.raise_for_status()
+        invalidate_state_cache(branch)
         return True
     except Exception as e:
         logger.warning(f"forget_unit failed for {unit_hash!r}: {e!r}")

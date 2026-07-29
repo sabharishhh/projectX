@@ -47,22 +47,21 @@
   });
 
   const submitKeymap = Prec.highest(
-    keymap.of([
-      {
-        key: "Shift-Enter",
-        run: () => false
-      },
-      {
-        key: "Enter",
-        run: () => {
-          if (streaming) return false; 
-          
-          sendMessage();
-          return true;
-        }
+  keymap.of([
+    {
+      key: "Shift-Enter",
+      run: () => false
+    },
+    {
+      key: "Enter",
+      run: (view) => {
+        if (streaming) return false;
+        sendMessage(view.state.doc.toString());
+        return true;
       }
-    ])
-  );
+    }
+  ])
+);
 
   const customMarkdownStyle = HighlightStyle.define([
     {
@@ -222,12 +221,13 @@
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   });
 
-  async function sendMessage() {
-    if (!input.trim() || streaming) return;
+  async function sendMessage(overrideText) {
+    const text = overrideText ?? input;
+    if (!text.trim() || streaming) return;
 
-    const userText = input;
+    const userText = text;
     messages.push({ role: "user", content: userText });
-    
+
     input = "";
     streaming = true;
 
@@ -447,7 +447,7 @@
           placeholder="Ask ProjectX"
         />
       </div>
-      <button class="send" onclick={sendMessage} disabled={streaming}>
+      <button class="send" onclick={() => sendMessage()} disabled={streaming}>
         {streaming ? "…" : "Send"}
       </button>
     </div>

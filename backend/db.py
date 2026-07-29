@@ -172,11 +172,25 @@ def save_summary(conversation_id: str, summary: str, summarized_through: int):
     conn.commit()
     conn.close()
 
-def save_retrieval_trace(conversation_id: str, message: str, trace: dict):
+def save_retrieval_trace(conversation_id: str, message: str, trace: dict, keep_last: int = 20):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO retrieval_traces (conversation_id, message, trace, created_at) VALUES (?, ?, ?, ?)",
         (conversation_id, message, json.dumps(trace), datetime.now(timezone.utc).isoformat()),
+    )
+    # Pure debug/introspection data — nothing in the app depends on old
+    # entries surviving, so bounding per-conversation prevents unbounded
+    # growth with no new scheduler/cron infrastructure needed. keep_last
+    # matches get_retrieval_traces' existing default limit=20 — the read
+    # side never asks for more than that anyway.
+    conn.execute(
+        """DELETE FROM retrieval_traces
+           WHERE conversation_id = ? AND id NOT IN (
+               SELECT id FROM retrieval_traces
+               WHERE conversation_id = ?
+               ORDER BY id DESC LIMIT ?
+           )""",
+        (conversation_id, conversation_id, keep_last),
     )
     conn.commit()
     conn.close()

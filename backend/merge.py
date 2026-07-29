@@ -1,6 +1,8 @@
 import json
 import httpx
 
+from memory import invalidate_state_cache
+
 MEMORY_URL = "http://127.0.0.1:8100"
 
 MERGE_COMPARE_PROMPT = """Compare two sets of memory facts about the same person —
@@ -81,4 +83,5 @@ def apply(from_branch: str, into_branch: str, adopt: list[str],
         timeout=5.0,
     )
     r.raise_for_status()
+    invalidate_state_cache(into_branch)
     return r.json()
