@@ -1,5 +1,6 @@
 import json
 from uuid import uuid4
+from concurrent.futures import ThreadPoolExecutor
 
 import ledger
 import chatlog
@@ -28,7 +29,21 @@ def stream_chat(conversation_id: str, message: str):
     history = load_messages(conversation_id)
     save_message(conversation_id, "user", message)
 
-    skill = skill_registry.select(provider, message)
+    # Skill-selection and search-decision are both independent LLM
+    # classifications of the same message — neither reads the other's
+    # output — so they run concurrently instead of one after another.
+    # search_decision fires unconditionally here and gets discarded below
+    # if the resolved skill turns out to disallow web_search (e.g. the
+    # "writing" skill's deny-all tools list) — a small, occasional wasted
+    # call traded for latency on every other turn.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        skill_future = pool.submit(skill_registry.select, provider, message)
+        search_decision_future = pool.submit(search_decision_module.should_search, provider, message)
+        skill = skill_future.result()
+        search_decision = search_decision_future.result()
+
+    if not skill_registry.allows(skill, "web_search"):
+        search_decision = None
 
     existing_branches = fetch_branches()
     allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
@@ -40,24 +55,44 @@ def stream_chat(conversation_id: str, message: str):
     # it guessed wrong or a question didn't clearly belong to one domain.
     # Retrieval scoring (relevance + recency + pinned set) now decides what's
     # worth injecting, instead of a folder-like filter deciding it first.
-    known = [{**u, "branch": b} for b in allowed_branches for u in fetch_state(b)]
+    # Each branch's fetch_state call is independent of the others, so they
+    # fire concurrently rather than one after another — results are then
+    # reassembled in allowed_branches order (not completion order) so
+    # behavior stays deterministic regardless of which branch responds first.
+    with ThreadPoolExecutor(max_workers=max(len(allowed_branches), 1)) as pool:
+        state_futures = {b: pool.submit(fetch_state, b) for b in allowed_branches}
+        known = [{**u, "branch": b} for b in allowed_branches for u in state_futures[b].result()]
+
     forget_matches = forgetting.detect_forget_request(provider, message, known, allowed_branches)
 
+    # Same concurrency treatment for the relevance-scored fetch per branch.
+    # Iterating the results in allowed_branches order afterward (not
+    # completion order) matters here specifically: when the same hash
+    # appears in more than one branch's results, `seen` lets only the
+    # first-encountered one through, and "first" needs to mean "first in
+    # allowed_branches order," not "whichever thread happened to finish
+    # first" — otherwise which branch a duplicate gets credited to would
+    # be nondeterministic between runs.
     seen, all_candidates = set(), []
     per_branch_debug = {}
-    for b in allowed_branches:
-        results = fetch_relevant(
-            message, branch=b, max_units=12,
-            boost_types=(skill or {}).get("boost_types"),
-        )
-        per_branch_debug[b] = [
-            {"hash": u["hash"][:8], "content": u["content"], "score": u.get("score")}
-            for u in results
-        ]
-        for u in results:
-            if u["hash"] not in seen:
-                seen.add(u["hash"])
-                all_candidates.append({**u, "branch": b})
+    with ThreadPoolExecutor(max_workers=max(len(allowed_branches), 1)) as pool:
+        relevant_futures = {
+            b: pool.submit(
+                fetch_relevant, message, branch=b, max_units=12,
+                boost_types=(skill or {}).get("boost_types"),
+            )
+            for b in allowed_branches
+        }
+        for b in allowed_branches:
+            results = relevant_futures[b].result()
+            per_branch_debug[b] = [
+                {"hash": u["hash"][:8], "content": u["content"], "score": u.get("score")}
+                for u in results
+            ]
+            for u in results:
+                if u["hash"] not in seen:
+                    seen.add(u["hash"])
+                    all_candidates.append({**u, "branch": b})
 
     all_candidates.sort(key=lambda u: u["score"], reverse=True)
     injected = all_candidates[:12]
@@ -112,7 +147,7 @@ def stream_chat(conversation_id: str, message: str):
     activity_log = []
 
     if skill:
-        ev = {"kind": "skill", "label": f"{skill['name']}ing"}
+        ev = {"kind": "skill", "label": f"Using {skill['name']} skill"}
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
@@ -124,10 +159,6 @@ def stream_chat(conversation_id: str, message: str):
         }
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
-
-    search_decision = None
-    if skill_registry.allows(skill, "web_search"):
-        search_decision = search_decision_module.should_search(provider, message)
 
     memory_allowed = skill_registry.allows(skill, "memory_search")
     web_iterative = (

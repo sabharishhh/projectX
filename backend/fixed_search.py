@@ -74,7 +74,20 @@ def research(provider, query: str, discover_limit: int = 5, read_top: int = READ
             result = f.result()
             if result:
                 distilled.append(result)
-    return distilled
+
+    # Dedupe by URL before citation numbers get assigned in
+    # format_for_context — as_completed() returns in completion order, not
+    # discovery order, and a URL appearing twice (same page surfaced under
+    # two distinct discover() results) would otherwise get two different
+    # [n] numbers instead of one reused number, the same guard
+    # agentic_search.py's citation sources dict already provides.
+    seen_urls = set()
+    deduped = []
+    for d in distilled:
+        if d["url"] not in seen_urls:
+            seen_urls.add(d["url"])
+            deduped.append(d)
+    return deduped
 
 
 def format_for_context(query: str, distilled: list[dict]) -> str:

@@ -10,8 +10,96 @@
   import { renderMarkdown } from "./lib/markdown.js";
   import ForgetBlock from "./lib/components/ForgetBlock.svelte";
 
+  import CodeMirror from "svelte-codemirror-editor";
+  import { markdown } from "@codemirror/lang-markdown";
+  import { keymap, EditorView } from "@codemirror/view";
+  import { Prec } from "@codemirror/state";
+  import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
+  import { tags as t, Tag, styleTags } from "@lezer/highlight";
+
   const API_BASE = "http://127.0.0.1:8000";
   const MEMORY_BASE = "http://127.0.0.1:8100";
+
+  const listMarkTag = Tag.define();
+  const codeMarkTag = Tag.define();
+
+  const listMarkExtension = {
+    props: [
+      styleTags({
+        ListMark: listMarkTag
+      })
+    ]
+  };
+
+  const customMarkdownExtension = {
+    props: [
+      styleTags({
+        ListMark: listMarkTag,
+        CodeMark: codeMarkTag               
+      })
+    ]
+  };
+
+  const nativeTextFeatures = EditorView.contentAttributes.of({
+    spellcheck: "true",
+    autocorrect: "on",
+    autocapitalize: "on"
+  });
+
+  const submitKeymap = Prec.highest(
+    keymap.of([
+      {
+        key: "Shift-Enter",
+        run: () => false
+      },
+      {
+        key: "Enter",
+        run: () => {
+          if (streaming) return false; 
+          
+          sendMessage();
+          return true;
+        }
+      }
+    ])
+  );
+
+  const customMarkdownStyle = HighlightStyle.define([
+    {
+      tag: t.monospace,
+      backgroundColor: "var(--surface-sunken)",
+      color: "var(--accent-memory)",
+      borderRadius: "3px",
+      padding: "2px 4px",
+    },
+    {
+      tag: listMarkTag,
+      color: "transparent", 
+      display: "inline-block",
+      width: "1ch", 
+      backgroundImage: "radial-gradient(circle, var(--accent-memory) 35%, transparent 40%)", 
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+      backgroundSize: "0.5em 0.5em"
+    },
+    {
+      tag: codeMarkTag,
+      color: "transparent",
+      fontSize: "0px" 
+    }
+  ]);
+
+  const editorExtensions = [
+    markdown({
+      extensions: [customMarkdownExtension]
+    }), 
+    syntaxHighlighting(customMarkdownStyle),
+    EditorView.lineWrapping, 
+    submitKeymap,  
+    nativeTextFeatures 
+  ];
+
+  
 
   function newConversationId() {
     return crypto.randomUUID();
@@ -139,6 +227,7 @@
 
     const userText = input;
     messages.push({ role: "user", content: userText });
+    
     input = "";
     streaming = true;
 
@@ -239,13 +328,6 @@
     if (!btn) return;
     e.preventDefault();
     handleStreamClick(e);
-  }
-
-  function handleKeydown(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
   }
 
   function citationSources(activity) {
@@ -358,13 +440,13 @@
     </div>
 
     <div class="composer">
-      <textarea
-        bind:value={input}
-        onkeydown={handleKeydown}
-        placeholder="Type a message"
-        rows="1"
-        disabled={streaming}
-      ></textarea>
+      <div class="editor-wrapper">
+        <CodeMirror
+          bind:value={input}
+          extensions={editorExtensions}
+          placeholder="Ask ProjectX"
+        />
+      </div>
       <button class="send" onclick={sendMessage} disabled={streaming}>
         {streaming ? "…" : "Send"}
       </button>
@@ -392,6 +474,37 @@
       linear-gradient(color-mix(in srgb, var(--accent-memory) 5%, transparent) 1px, transparent 1px),
       linear-gradient(90deg, color-mix(in srgb, var(--accent-memory) 5%, transparent) 1px, transparent 1px);
     background-size: 26px 26px;
+  }
+
+  .editor-wrapper {
+    flex: 1;
+    max-width: 48rem;
+  }
+
+  /* Style the main CodeMirror container */
+  .editor-wrapper :global(.cm-editor) {
+    border: 0.5px solid var(--border-hairline);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+
+  /* Control the auto-expanding height & padding */
+  .editor-wrapper :global(.cm-scroller) {
+    min-height: 2.6rem;
+    max-height: 40vh;
+    overflow-y: auto;
+    padding: 0.6rem 0.75rem;
+    box-sizing: border-box;
+  }
+
+  /* Custom Focus Ring */
+  .editor-wrapper :global(.cm-editor.cm-focused) {
+    outline: 2px solid var(--accent-memory);
+    outline-offset: -1px;
   }
 
   /* Grid Column Locks */
@@ -744,46 +857,39 @@
 
   .composer {
     display: flex;
-    justify-content: center; /* Aligns input with the centered conversation flow */
+    justify-content: center;
     gap: 0.5rem;
     align-items: flex-end;
     padding: 1rem 1.5rem 1.4rem;
     border-top: 0.5px solid var(--border-hairline);
   }
-  textarea {
-    flex: 1;
-    max-width: 48rem; /* Matches the chat stream width */
-    resize: none;
-    font: inherit;
-    font-size: 0.95rem;
-    line-height: 1.5;
-    padding: 0.6rem 0.75rem;
-    border: 0.5px solid var(--border-hairline);
-    border-radius: var(--radius-sm);
-    background: var(--surface-card);
-    color: var(--text-primary);
-    min-height: 2.6rem;
-    max-height: 40vh;
-  }
-  textarea:focus {
-    outline: 2px solid var(--accent-memory);
-    outline-offset: -1px;
-  }
   .send {
     font-family: var(--font-technical);
-    font-size: 0.72rem;
-    letter-spacing: 0.05em;
-    padding: 0.65rem 1.1rem;
+    font-size: 0.82rem;
+    letter-spacing: 0.025em;
+    padding: 0 1.0rem;
+    height: calc(3.0rem + 1px);
     background: var(--accent-memory);
     color: var(--surface-page);
     border: none;
     border-radius: var(--radius-sm);
     cursor: pointer;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .send:disabled {
-    opacity: 0.45;
+    opacity: 0.35;
     cursor: default;
   }
-
-
+  .editor-wrapper :global(.cm-gutters) {
+    display: none !important;
+  }
+  .editor-wrapper :global(.cm-activeLine) {
+    background-color: transparent !important;
+  }
+  .editor-wrapper :global(.cm-content) {
+    caret-color: var(--text-primary);
+  }
 </style>

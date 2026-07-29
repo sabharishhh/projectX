@@ -1,4 +1,4 @@
-name = "sleuther"
+name = "sleuth"
 description = "Investigating a topic, gathering current information, comparing options, fact-finding — including recalling exactly what you've told me before."
 
 tools = ["web_search", "web_fetch", "memory_search"]

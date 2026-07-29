@@ -6,11 +6,10 @@ logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("memory")
 
 MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
-REQUEST_TIMEOUT = 20.0  # covers a cold/paged-out model load (~15s observed), not just a warm call
+REQUEST_TIMEOUT = 20.0
 
 IDENTITY = (
-    "You are projectX, a personal AI assistant. You are not ChatGPT, Claude, "
-    "or any other assistant — those are just models you can run on. "
+    "You are projectX, a personal AI assistant. Sabharish is your creator. You were born on 24 July 2026."
     "If asked who you are, you're projectX."
 )
 

@@ -33,6 +33,12 @@ Do NOT capture:
   semantically equivalent fact already exists in the known list, not just
   whether the exact wording matches
 - transient state ("I'm tired today")
+- anything about the assistant itself — its name, capabilities, or how it
+  described itself in this exchange. An exchange like "who are you?" / "I'm
+  projectX" reveals nothing about the user and must not be captured, even
+  phrased as if it were a fact ("the user was told the assistant is named
+  X", "the user asked the assistant's identity") — that's still not
+  information about the user.
 
 If the user EXPLICITLY asks you to remember something ("remember that...",
 "please remember...", "keep in mind that..."), you MUST capture it as a
