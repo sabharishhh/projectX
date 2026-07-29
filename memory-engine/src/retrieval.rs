@@ -65,15 +65,28 @@ fn type_priority(unit_type: UnitType, query: &str) -> f64 {
 }
 
 /// MemoryUnit-specific ranking: dense relevance (via rank_by_relevance)
-/// blended with recency, type-intent matching, and skill boost.
+/// blended with BM25 (exact/rare-term matching), recency, type-intent
+/// matching, and skill boost. bm25_scores is precomputed by the caller
+/// (only MemoryStore can run a tantivy query) — same pattern already
+/// used for embeddings, keeping this module free of any tantivy/store
+/// dependency.
 pub fn score(
     query: &str,
     query_embedding: &[f32],
     units: Vec<(String, MemoryUnit)>,
     embeddings: &HashMap<String, Vec<f32>>,
+    bm25_scores: &HashMap<String, f64>,
     boost: &[UnitType],
 ) -> Vec<ScoredUnit> {
     let ranked = rank_by_relevance(query_embedding, units, embeddings);
+
+    // Normalize BM25 into a 0–1-ish range before blending — raw BM25 is
+    // unbounded and on a completely different scale than cosine
+    // similarity (0–1), so blending it in unnormalized would let it
+    // silently dominate or do nothing depending on the query. Normalizing
+    // against this result set's own max score keeps it comparable to the
+    // dense signal regardless of absolute magnitude.
+    let max_bm25 = bm25_scores.values().cloned().fold(0.0_f64, f64::max);
 
     let mut scored: Vec<ScoredUnit> = ranked
         .into_iter()
@@ -82,7 +95,21 @@ pub fn score(
             let priority = type_priority(unit.unit_type, query);
             let recency = recency_score(unit.created_at);
             let skill_boost = if boost.contains(&unit.unit_type) { 1.4 } else { 1.0 };
-            let blended = (r.dense_score.max(0.0) + recency * 0.2) * priority * skill_boost;
+
+            let bm25_norm = if max_bm25 > 0.0 {
+                bm25_scores.get(&hash).copied().unwrap_or(0.0) / max_bm25
+            } else {
+                0.0
+            };
+
+            // Dense and BM25 are combined additively (not multiplicatively)
+            // before the type/recency/skill multipliers apply — either
+            // signal alone should be enough to surface a unit; a fact that
+            // BM25 strongly matches but dense ranks poorly (an exact name
+            // match phrased very differently from the query) shouldn't be
+            // suppressed just because one signal missed it.
+            let relevance = r.dense_score.max(0.0) + bm25_norm * 0.5;
+            let blended = (relevance + recency * 0.2) * priority * skill_boost;
 
             ScoredUnit { hash, unit, score: blended, dense_score: r.dense_score }
         })

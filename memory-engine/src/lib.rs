@@ -4,6 +4,7 @@ pub mod store;
 pub mod unit;
 pub mod embedding;
 pub mod reranker;
+mod bm25;
 
 pub use commit::{Commit, UnitChange};
 pub use store::{valid_branch_name, MemoryStore, StoreError};

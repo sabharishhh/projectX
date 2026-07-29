@@ -286,9 +286,9 @@ async fn retrieve(
         .map_err(internal)?
         .map_err(internal)?;
     let embeddings = app.store.embeddings_for(&rest).map_err(internal)?;
+    let bm25_scores = app.store.bm25_scores(&req.branch, &req.query, DENSE_POOL_K).map_err(internal)?;
 
-    let scored = memory_engine::retrieval::score(&req.query, &query_embedding, rest, &embeddings, &req.boost_types);
-
+    let scored = memory_engine::retrieval::score(&req.query, &query_embedding, rest, &embeddings, &bm25_scores, &req.boost_types);
     let rerank_candidates: Vec<(String, MemoryUnit)> = scored
         .into_iter()
         .take(DENSE_POOL_K)

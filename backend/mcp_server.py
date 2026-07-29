@@ -6,9 +6,6 @@ bundling them into one server is a deployment/organizational choice, not a
 loosening of any individual tool's constraints."""
 
 import json
-import os
-import httpx
-
 import extraction
 import search as discovery
 from memory_client import client

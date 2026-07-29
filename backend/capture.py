@@ -1,6 +1,5 @@
 import os
 import json
-import httpx
 import logging
 
 from state import CAPTURE_MODEL
@@ -88,8 +87,11 @@ def extract_units(provider, user_message: str, assistant_message: str,
             [{"role": "system", "content": prompt}, {"role": "user", "content": exchange}],
             CAPTURE_MODEL,
         ))
+
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         units = parsed.get("units", [])
+        logger.info(f"capture proposed: exchange={exchange!r} units={units}")
+
         for u in units:
             if u.get("branch") not in branches:
                 u["branch"] = "main"

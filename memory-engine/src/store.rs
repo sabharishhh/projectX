@@ -10,6 +10,7 @@ use crate::commit::{Commit, UnitChange};
 use crate::unit::MemoryUnit;
 
 use regex::Regex;
+use crate::bm25::BM25Store;
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -54,6 +55,7 @@ const CHECKPOINT_INTERVAL: usize = 20;
 pub struct MemoryStore {
     root: PathBuf,
     objects_dir: PathBuf,
+    bm25: BM25Store,
 }
 
 impl MemoryStore {
@@ -61,7 +63,8 @@ impl MemoryStore {
         let root = root.as_ref().to_path_buf();
         let objects_dir = root.join("objects");
         fs::create_dir_all(&objects_dir)?;
-        Ok(Self { root, objects_dir })
+        let bm25 = BM25Store::new(&root);
+        Ok(Self { root, objects_dir, bm25 })
     }
 
     // --- units ---
@@ -124,7 +127,31 @@ impl MemoryStore {
         let hash = self.put_commit(commit)?;
         self.set_head(branch, &hash)?;
         self.maybe_checkpoint(&hash)?;
+
+        // Index whatever units this commit actually introduced as live
+        // content — Superseded changes reference a hash going OUT of HEAD,
+        // nothing new to index for those.
+        for change in &commit.changes {
+            let unit_hash = match change {
+                UnitChange::Added { hash } => Some(hash),
+                UnitChange::Modified { to, .. } => Some(to),
+                UnitChange::Superseded { .. } => None,
+            };
+            if let Some(h) = unit_hash {
+                let unit = self.get(h)?;
+                self.bm25.upsert(branch, h, &unit.content)?;
+            }
+        }
+
         Ok(hash)
+    }
+
+    /// BM25 relevance scores for a branch's content, hash -> score. One
+    /// signal among several in retrieval::score() — dense catches meaning,
+    /// this catches exact/rare terms a paraphrase-tolerant embedding can
+    /// under-rank.
+    pub fn bm25_scores(&self, branch: &str, query: &str, limit: usize) -> Result<HashMap<String, f64>, StoreError> {
+        self.bm25.search(branch, query, limit)
     }
 
     /// Every branch that has at least one commit. A branch exists the

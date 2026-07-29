@@ -23,13 +23,13 @@
   const listMarkTag = Tag.define();
   const codeMarkTag = Tag.define();
 
-  const listMarkExtension = {
-    props: [
-      styleTags({
-        ListMark: listMarkTag
-      })
-    ]
-  };
+  let latestText = "";
+
+  const textSyncExtension = EditorView.updateListener.of((update) => {
+    if (update.docChanged) {
+      latestText = update.state.doc.toString();
+    }
+  });
 
   const customMarkdownExtension = {
     props: [
@@ -95,7 +95,8 @@
     syntaxHighlighting(customMarkdownStyle),
     EditorView.lineWrapping, 
     submitKeymap,  
-    nativeTextFeatures 
+    nativeTextFeatures,
+    textSyncExtension
   ];
 
   
@@ -134,16 +135,20 @@
   let messages = $state([]);
   let input = $state("");
   let streaming = $state(false);
+  let processing = $state(false);
   let memory = $state([]);
   let conversations = $state([]);
+  let history = $state([]);
   
   // UI States
   let sidebarOpen = $state(true);
   let panelOpen = $state(true);
   let scroller;
+  let panelWidth = $state(Number(localStorage.getItem("projectx-panel-width")) || 300);
+  let resizingPanel = false;
 
   onMount(async () => {
-    await Promise.all([loadMessages(), loadMemory(), loadConversations()]);
+    await Promise.all([loadMessages(), loadMemory(), loadHistory(), loadConversations()]);
   });
 
   async function loadMessages() {
@@ -183,6 +188,28 @@
     }
   }
 
+  async function loadHistory() {
+    try {
+      const branchesRes = await fetch(`${MEMORY_BASE}/branches`);
+      const branchList = await branchesRes.json();
+      const allBranches = branchList.length ? branchList : ["main"];
+
+      const results = await Promise.all(
+        allBranches.map((b) =>
+          fetch(`${MEMORY_BASE}/history?branch=${encodeURIComponent(b)}`)
+            .then((r) => r.json())
+            .then((commits) => commits.map((c) => ({ ...c, branch: b })))
+        )
+      );
+
+      history = results.flat().sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at)
+      );
+    } catch {
+      history = [];
+    }
+  }
+
   async function loadConversations() {
     try {
       const res = await fetch(`${API_BASE}/api/conversations`);
@@ -213,7 +240,7 @@
     });
     const data = await res.json();
     act.resolved = data.ok ? choice : "expired";
-    if (data.ok) await loadMemory();
+    if (data.ok) { await loadMemory(); await loadHistory(); }
   }
 
   $effect(() => {
@@ -222,14 +249,17 @@
   });
 
   async function sendMessage(overrideText) {
-    const text = overrideText ?? input;
+    // Prioritize override (Enter key), then our sync tracker, then fallback to input
+    const text = overrideText ?? latestText ?? input;
     if (!text.trim() || streaming) return;
 
     const userText = text;
     messages.push({ role: "user", content: userText });
 
     input = "";
+    latestText = "";
     streaming = true;
+    processing = true;
 
     const i = messages.length;
     messages.push({ role: "assistant", content: "", activity: [], error: null });
@@ -247,6 +277,7 @@
 
       while (true) {
         const { done, value } = await reader.read();
+        processing = false;
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -269,7 +300,7 @@
               );
             }
             messages[i].activity.push({ ...ev.event, open: false });
-            if (ev.event.kind === "memory_write") loadMemory();
+            if (ev.event.kind === "memory_write") { loadMemory(); loadHistory(); }
           } else if (ev.type === "error") {
             messages[i].error = ev.message;
           }
@@ -278,6 +309,7 @@
     } catch (e) {
       messages[i].error = e.message;
     }
+    processing = false;
     streaming = false;
     await loadConversations(); 
   }
@@ -290,7 +322,7 @@
 
   async function clearMemory() {
     await fetch(`${MEMORY_BASE}/reset`, { method: "POST" });
-    await Promise.all([loadMessages(), loadMemory()]);
+    await Promise.all([loadMessages(), loadMemory(), loadHistory()]);
   }
 
   async function deleteConversation(id) {
@@ -309,7 +341,25 @@
     });
     const data = await res.json();
     act.resolved = data.ok ? choice : "expired";
-    if (data.ok) await loadMemory();
+    if (data.ok) { await loadMemory(); await loadHistory(); }
+  }
+
+  function startResize(e) {
+    resizingPanel = true;
+    e.preventDefault();
+    window.addEventListener("pointermove", onResize);
+    window.addEventListener("pointerup", stopResize);
+  }
+  function onResize(e) {
+    if (!resizingPanel) return;
+    const newWidth = window.innerWidth - e.clientX;
+    panelWidth = Math.min(640, Math.max(260, newWidth));
+  }
+  function stopResize() {
+    resizingPanel = false;
+    localStorage.setItem("projectx-panel-width", String(panelWidth));
+    window.removeEventListener("pointermove", onResize);
+    window.removeEventListener("pointerup", stopResize);
   }
 
   function handleStreamClick(e) {
@@ -414,11 +464,21 @@
         <p class="empty">Say something. What you reveal about yourself gets remembered.</p>
       {/if}
 
-      {#each messages as msg}
+      {#each messages as msg, idx}
         {#if msg.role === "user"}
           <div class="turn user"><div class="said">{msg.content}</div></div>
         {:else}
           <div class="turn assistant">
+            
+            <!-- Processing indicator for the latest assistant message -->
+            {#if processing && idx === messages.length - 1}
+              <div class="processing-container">
+                <div class="typing-indicator">
+                  <span></span><span></span><span></span>
+                </div>
+              </div>
+            {/if}
+
             <div class="prose">{@html renderMarkdown(msg.content, citationSources(msg.activity))}</div>
 
             {#if msg.error}
@@ -455,8 +515,10 @@
 
   {#if panelOpen}
     <div class="panel-wrap" transition:slide={{ axis: 'x', duration: 300, easing: cubicOut }}>
-      <div class="panel-inner">
-        <MemoryPanel {memory} onToggle={() => (panelOpen = false)} />
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="resize-handle" onpointerdown={startResize}></div>
+      <div class="panel-inner" style="width: {panelWidth}px">
+        <MemoryPanel {memory} {history} onToggle={() => (panelOpen = false)} />
       </div>
     </div>
   {/if}
@@ -518,6 +580,18 @@
     grid-column: 3;
     height: 100%;
     overflow: hidden;
+    display: flex;
+  }
+
+  .resize-handle {
+    width: 5px;
+    flex-shrink: 0;
+    cursor: ew-resize;
+    background: transparent;
+  }
+  .resize-handle:hover,
+  .resize-handle:active {
+    background: var(--accent-memory);
   }
 
   .chat {
@@ -534,7 +608,6 @@
   }
 
   .panel-inner {
-    width: 300px;
     height: 100%;
     min-height: 0;
     overflow-y: auto;
@@ -574,6 +647,41 @@
   .text-btn:hover {
     color: var(--accent-memory);
     border-color: var(--accent-memory);
+  }
+
+  .processing-container {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem 0;
+  }
+
+  .typing-indicator {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .typing-indicator span {
+    width: 6px;
+    height: 6px;
+    background-color: var(--text-muted); 
+    border-radius: 50%;
+    animation: bounce 1.4s infinite ease-in-out both;
+  }
+
+  .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+  .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0s; }
+
+  @keyframes bounce {
+    0%, 80%, 100% {
+      transform: scale(0);
+      opacity: 0.5;
+    }
+    40% {
+      transform: scale(1);
+      opacity: 1;
+    }
   }
 
   .icon-btn {
