@@ -7,7 +7,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::commit::{Commit, UnitChange};
-use crate::unit::MemoryUnit;
+use crate::unit::{MemoryUnit, UnitType, CommitmentStatus};
 
 use regex::Regex;
 use crate::bm25::BM25Store;
@@ -287,6 +287,42 @@ impl MemoryStore {
         let re = Regex::new(pattern)?;
         let state = self.current_state(branch)?;
         Ok(state.into_iter().filter(|(_, unit)| re.is_match(&unit.content)).collect())
+    }
+
+    /// Every currently-open commitment on a branch, regardless of deadline —
+    /// a distinct question from open_commitments_due (which is specifically
+    /// deadline-gated, for the "what's coming up soon" surfacing case).
+    /// Used for narrowing resolution candidates, where deadline is
+    /// irrelevant to whether a commitment is still open.
+    pub fn open_commitments(&self, branch: &str) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
+        let state = self.current_state(branch)?;
+        Ok(state
+            .into_iter()
+            .filter(|(_, u)| {
+                u.unit_type == UnitType::Commitment
+                    && u.commitment_status == Some(CommitmentStatus::Open)
+            })
+            .collect())
+    }
+
+    /// Every currently-open commitment whose deadline falls at or before
+    /// `within`, across a branch's live state. Deterministic filter, same
+    /// category as search_state() — plain, exact conditions, auditable, no
+    /// LLM judgment anywhere in producing this result.
+    pub fn open_commitments_due(
+        &self,
+        branch: &str,
+        within: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<(String, MemoryUnit)>, StoreError> {
+        let state = self.current_state(branch)?;
+        Ok(state
+            .into_iter()
+            .filter(|(_, u)| {
+                u.unit_type == UnitType::Commitment
+                    && u.commitment_status == Some(CommitmentStatus::Open)
+                    && u.deadline.map_or(false, |d| d <= within)
+            })
+            .collect())
     }
 
     // --- reset (dev only — wipes every branch, not just one) ---

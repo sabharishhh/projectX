@@ -8,7 +8,7 @@ mod bm25;
 
 pub use commit::{Commit, UnitChange};
 pub use store::{valid_branch_name, MemoryStore, StoreError};
-pub use unit::{MemoryUnit, Provenance, UnitType};
+pub use unit::{MemoryUnit, UnitType, Provenance, CommitmentStatus};
 
 #[cfg(test)]
 mod tests {

@@ -121,7 +121,7 @@
         if (last?.kind === "tool_group") {
           last.steps.push(act.label);
         } else {
-          out.push({ kind: "tool_group", label: "Searching the web", steps: [act.label] });
+          out.push({ kind: "tool_group", label: "Searching...", steps: [act.label] });
         }
       } else {
         out.push(act);

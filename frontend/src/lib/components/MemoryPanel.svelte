@@ -6,11 +6,18 @@
 
   let view = $state('current'); // 'current' | 'timeline'
   let selectedEntry = $state(null);
+  let hoveredHash = $state(null);
+  let tooltipAlign = $state('center'); // 'center' | 'left' | 'right'
 
-  const ORDER = ['identity', 'preference', 'project', 'decision', 'relationship'];
+  const ORDER = ['identity', 'preference', 'project', 'decision', 'relationship', 'commitment'];
   const grouped = $derived(
-    ORDER.map((type) => ({ type, items: memory.filter((u) => u.unit_type === type) }))
-         .filter((g) => g.items.length)
+    ORDER.map((type) => ({
+      type,
+      items: memory.filter((u) =>
+        u.unit_type === type &&
+        !(type === 'commitment' && u.commitment_status && u.commitment_status !== 'open')
+      ),
+    })).filter((g) => g.items.length)
   );
 
   function verb(change) {
@@ -24,6 +31,10 @@
     const kinds = new Set(entry.changes.map((c) => c.kind));
     if (kinds.size === 1) return verb(entry.changes[0]);
     return 'Updated';
+  }
+
+  function isCommitment(entry) {
+    return entry.changes.some((c) => c.unit_type === 'commitment');
   }
 
   function relativeTime(iso) {
@@ -75,6 +86,31 @@
       return { branch, x: laneX(branch), color: branchColor(branch), top, height: bottom - top };
     });
   });
+
+  // Measures the hovered node against the actual scrollable container at
+  // hover time — accounts for real scroll position, unlike a purely
+  // static x-vs-graphWidth check, which is why last version's tooltip
+  // could still clip: whether a node is "near an edge" depends on the
+  // CURRENT scroll offset, not just its absolute position in the data.
+  function handleNodeHover(event, hash) {
+    hoveredHash = hash;
+    const nodeRect = event.currentTarget.getBoundingClientRect();
+    const container = event.currentTarget.closest('.graph-scroll');
+    const containerRect = container.getBoundingClientRect();
+    const tooltipHalfWidth = 120; // ~ max-width 14rem / 2, plus a little margin
+
+    if (nodeRect.left - tooltipHalfWidth < containerRect.left) {
+      tooltipAlign = 'left';
+    } else if (nodeRect.right + tooltipHalfWidth > containerRect.right) {
+      tooltipAlign = 'right';
+    } else {
+      tooltipAlign = 'center';
+    }
+  }
+
+  function handleNodeLeave() {
+    hoveredHash = null;
+  }
 </script>
 
 <div class="panel">
@@ -115,9 +151,13 @@
                 >
                   {u.content}
                 </span>
-                <button class="source technical" title={u.source} onclick={() => onopensource(u.source)}>
-                  {u.hash.slice(0, 8)}
-                </button>
+                {#if u.deadline}
+                  <span class="technical type">due {new Date(u.deadline).toLocaleDateString()}</span>
+                {:else}
+                  <button class="source technical" title={u.source} onclick={() => onopensource(u.source)}>
+                    {u.hash.slice(0, 8)}
+                  </button>
+                {/if}
               </li>
             {/each}
           </ul>
@@ -128,6 +168,17 @@
     {#if history.length === 0}
       <p class="empty">No history yet.</p>
     {:else}
+      <p class="graph-note">
+        Each column is a branch, arranged by time. Branches don't currently
+        record where they forked from — this shows parallel history, not
+        merges between them.
+      </p>
+
+      <div class="graph-legend">
+        <span class="legend-item"><span class="legend-shape circle"></span> fact</span>
+        <span class="legend-item"><span class="legend-shape diamond"></span> commitment</span>
+      </div>
+
       <div class="graph-scroll">
         <div class="graph" style="width:{graphWidth}px; height:{graphHeight}px">
           {#each lanes as lane (lane.branch)}
@@ -141,9 +192,14 @@
           {#each history as entry, i (entry.hash)}
             <button
               class="node"
+              class:commitment={isCommitment(entry)}
               class:selected={selectedEntry?.hash === entry.hash}
+              class:align-left={hoveredHash === entry.hash && tooltipAlign === 'left'}
+              class:align-right={hoveredHash === entry.hash && tooltipAlign === 'right'}
               style="left:{laneX(entry.branch)}px; top:{LABEL_HEIGHT + i * ROW_HEIGHT + ROW_HEIGHT / 2}px; background:{branchColor(entry.branch)}"
               data-preview="{commitVerb(entry)} — {entry.summary}"
+              onmouseenter={(e) => handleNodeHover(e, entry.hash)}
+              onmouseleave={handleNodeLeave}
               onclick={() => (selectedEntry = selectedEntry?.hash === entry.hash ? null : entry)}
               aria-label="{commitVerb(entry)}: {entry.summary}"
             ></button>
@@ -155,6 +211,9 @@
         <div class="detail-card" in:reveal>
           <div class="detail-header">
             <span class="detail-verb">{commitVerb(selectedEntry)}</span>
+            {#if isCommitment(selectedEntry)}
+              <span class="type-tag">commitment</span>
+            {/if}
             <span class="branch-tag">{selectedEntry.branch}</span>
             <button class="icon-btn small" onclick={() => (selectedEntry = null)} aria-label="Close">×</button>
           </div>
@@ -162,7 +221,10 @@
           <div class="detail-time">{new Date(selectedEntry.created_at).toLocaleString()}</div>
           <ul class="detail-changes">
             {#each selectedEntry.changes as change, i (i)}
-              <li>{verb(change)}{change.kind === 'modified' ? ` (${change.from.slice(0,8)} → ${change.to.slice(0,8)})` : ` (${change.hash.slice(0,8)})`}</li>
+              <li>
+                {verb(change)}{change.kind === 'modified' ? ` (${change.from.slice(0,8)} → ${change.to.slice(0,8)})` : ` (${change.hash.slice(0,8)})`}
+                {#if change.unit_type} — {change.unit_type}{/if}
+              </li>
             {/each}
           </ul>
           <button class="source technical" title={selectedEntry.source} onclick={() => onopensource(selectedEntry.source)}>
@@ -270,6 +332,30 @@
 
   .empty { margin:0; font-size:var(--size-meta); font-style:italic; color:var(--text-secondary); }
 
+  .graph-note {
+    margin: 0 0 var(--space-2);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-style: italic;
+    line-height: 1.4;
+  }
+
+  .graph-legend {
+    display: flex;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+  .legend-item { display: flex; align-items: center; gap: 0.35em; }
+  .legend-shape {
+    width: 9px; height: 9px;
+    background: var(--text-muted);
+    display: inline-block;
+  }
+  .legend-shape.circle { border-radius: 50%; }
+  .legend-shape.diamond { border-radius: 2px; transform: rotate(45deg); }
+
   .graph-scroll {
     overflow-x: auto;
     overflow-y: visible;
@@ -313,10 +399,14 @@
     outline-offset: 2px;
   }
 
-  /* same hover-preview trick used for citation badges elsewhere in this app */
-  .node {
-    position: absolute;
+  /* Commitments render as a diamond instead of a circle — same fill/
+     border rules, just a rotated square with squared-off corners so it
+     doesn't read as a stray circle at a glance. */
+  .node.commitment {
+    border-radius: 0;
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
   }
+
   .node::after {
     content: attr(data-preview);
     position: absolute;
@@ -341,6 +431,20 @@
   }
   .node:hover::after { opacity: 1; }
 
+  /* Real edge-aware positioning, set via JS at hover time based on actual
+     measured position against the scroll container — a static CSS-only
+     rule can't account for current scroll offset, which is what actually
+     determines whether a tooltip clips. */
+  .node.align-left::after {
+    left: 0;
+    transform: translateY(-6px);
+  }
+  .node.align-right::after {
+    left: auto;
+    right: 0;
+    transform: translateY(-6px);
+  }
+
   .detail-card {
     border: 0.5px solid var(--border-hairline);
     border-radius: var(--radius-sm);
@@ -355,7 +459,7 @@
     margin-bottom: var(--space-2);
   }
   .detail-verb { font-weight: 600; }
-  .branch-tag {
+  .type-tag, .branch-tag {
     color: var(--text-muted);
     font-size: 0.75em;
     padding: 0 0.4em;

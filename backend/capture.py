@@ -1,7 +1,7 @@
 import os
 import json
-import httpx
 import logging
+from datetime import datetime, timezone, timedelta
 
 from state import CAPTURE_MODEL
 from memory_client import client
@@ -20,6 +20,18 @@ Capture ONLY things that will still be true and useful in a future conversation:
 - project: something ongoing they're working on
 - decision: a specific choice they made, and why
 - relationship: people or entities in their life
+- commitment: a real promise to do something later — made by the user
+  ("I'll follow up with him next week") OR by the assistant on the user's
+  behalf ("I'll look into that and get back to you"). Extract a concrete
+  deadline if one is stated or clearly implied, resolving relative phrasing
+  ("next week", "tomorrow") into a concrete ISO datetime using the current
+  date you've already been given. If no deadline is stated or implied at
+  all, omit "deadline" — do not invent one. If a message names MULTIPLE
+  distinct actions as separate commitments (e.g. "I'll text Jamie about
+  the venue and confirm the caterer by Thursday"), extract each action as
+  its own separate commitment unit, even if they share one trailing
+  deadline phrase — apply that shared deadline to EACH of them
+  independently, don't fuse the actions into one combined commitment.
 
 Do NOT capture:
 - questions they asked, or the content of tasks they gave you
@@ -39,6 +51,15 @@ Do NOT capture:
   phrased as if it were a fact ("the user was told the assistant is named
   X", "the user asked the assistant's identity") — that's still not
   information about the user.
+
+For commitments specifically, also do NOT capture:
+- hypotheticals ("I would follow up if he replies") — no real commitment
+  has been made, only a condition described
+- past-tense reflections ("I should have followed up last week") — this
+  describes a missed opportunity, not a live, open commitment
+- vague, non-actionable intentions ("I need to think about this someday",
+  "I should really get better at this") — nothing concrete enough to
+  track or resolve later
 
 If the user EXPLICITLY asks you to remember something ("remember that...",
 "please remember...", "keep in mind that..."), you MUST capture it as a
@@ -63,9 +84,11 @@ Only for real contradictions, where both cannot be true at once. Do NOT use it
 for facts that merely relate to, extend, or sit alongside an existing one.
 
 Return JSON only, no other text:
-{{"units": [{{"content": "...", "unit_type": "preference", "provenance": "stated", "summary": "short plain-language note on what changed", "branch": "main", "supersedes": "a1b2c3d4"}}]}}
+{{"units": [{{"content": "...", "unit_type": "preference", "provenance": "stated", "summary": "short plain-language note on what changed", "branch": "main", "supersedes": "a1b2c3d4", "deadline": "2026-08-05T00:00:00Z"}}]}}
 
 Omit "supersedes" entirely when the fact is new rather than a replacement.
+Omit "deadline" entirely for anything that isn't a commitment, or a
+commitment with no discernible deadline.
 Return {{"units": []}} if nothing is worth remembering."""
 
 VERIFY_PROMPT = """A fact-extraction pass proposed this candidate fact about
@@ -75,19 +98,33 @@ User: {user_message}
 Assistant: {assistant_message}
 
 Candidate fact: "{content}"
+Candidate unit_type: {unit_type}
 
-Judge strictly: is this genuinely new, durable information ABOUT THE USER —
-not about the assistant, not a restated question, not something the user
-already told the assistant before, not a transient state? Facts about the
-assistant itself (its name, who created or built it, its capabilities) are
-NOT information about the user, even when phrased as if they were — "the
-user asked who created the assistant" is still a fact about the assistant,
-not the user.
+If unit_type is "commitment": judge whether a real promise was actually
+made in this exchange — by the user OR by the assistant on the user's
+behalf — and whether it's concrete enough to track (not a hypothetical,
+not a past-tense reflection, not a vague intention). A commitment the
+ASSISTANT makes to the user ("I'll look into it and get back to you") IS
+valid and durable — it's something owed to the user, not a stray fact
+about the assistant's identity or capabilities. The assistant
+acknowledging or restating the user's commitment back to them ("Got it",
+"Got both", "Noted") does NOT make the commitment "already known" or
+"not new information" — a commitment stated for the first time by the
+user in THIS exchange is new and valid, even if the assistant's reply
+simply confirms it received the message.
+
+For every other unit_type: judge strictly whether this is genuinely new,
+durable information ABOUT THE USER — not about the assistant, not a
+restated question, not something the user already told the assistant
+before, not a transient state. Facts about the assistant itself (its
+name, who created or built it, its capabilities) are NOT information
+about the user, even when phrased as if they were — "the user asked who
+created the assistant" is still a fact about the assistant, not the user.
 
 Return JSON only:
 {{"valid": true}}
 or
-{{"valid": false, "reason": "one line on why this isn't a valid user fact"}}"""
+{{"valid": false, "reason": "one line on why this isn't valid"}}"""
 
 VERIFY_SCHEMA = {
     "type": "object",
@@ -108,18 +145,86 @@ CAPTURE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "content": {"type": "string"},
-                    "unit_type": {"type": "string", "enum": ["identity", "preference", "project", "decision", "relationship"]},
+                    "unit_type": {"type": "string", "enum": ["identity", "preference", "project", "decision", "relationship", "commitment"]},
                     "provenance": {"type": "string", "enum": ["stated", "inferred"]},
                     "summary": {"type": "string"},
                     "branch": {"type": "string"},
                     "supersedes": {"type": ["string", "null"]},
+                    "deadline": {"type": ["string", "null"]},
                 },
-                "required": ["content", "unit_type", "provenance", "summary", "branch", "supersedes"],
+                "required": ["content", "unit_type", "provenance", "summary", "branch", "supersedes", "deadline"],
                 "additionalProperties": False,
             },
         },
     },
     "required": ["units"],
+    "additionalProperties": False,
+}
+
+RESOLVE_PROMPT = """The user's message (and the assistant's reply) may
+indicate that one or more of these currently OPEN commitments have now
+been completed or are no longer relevant:
+
+{open_commitments}
+
+Exchange:
+User: {user_message}
+Assistant: {assistant_message}
+
+For each commitment that this exchange genuinely resolves, decide its new
+status:
+- "done" — it was completed ("I sent it", "I followed up with him")
+- "cancelled" — it's no longer going to happen / no longer relevant
+  ("never mind, forget that", "that's not needed anymore")
+
+Mentioning a NEW commitment involving the same person or entity does NOT
+cancel or complete a DIFFERENT existing commitment about that same
+person — two separate commitments about the same person can both stay
+open at once. Only cancel or resolve a commitment if the message is
+clearly about THAT SPECIFIC commitment's task, or explicitly says to
+drop/cancel/never-mind it — not just because a new, unrelated commitment
+involving the same person came up in the same message.
+
+Be strict about matching the SPECIFIC subject — the same person, project,
+or thing the commitment was actually about — not just a similar-sounding
+action. "I emailed Sarah about the budget" does NOT resolve a commitment
+about emailing someone else, even about a similar topic, and does NOT
+resolve a commitment about a completely different action just because
+both mention "email." Mentioning the SAME PERSON or entity is not enough
+on its own — "I emailed the landlord about a leaky faucet" does NOT
+resolve a commitment to email the landlord about a lease renewal; the
+task/topic has to match too, not just who it involves. Only resolve a
+commitment if the exchange clearly refers to the SAME specific subject
+AND the SAME task the commitment names.
+
+Only include a commitment here if the exchange ACTUALLY resolves it — do
+not guess, and do not resolve something just because it's topically
+related. If nothing in this exchange resolves any of the listed
+commitments, return an empty list.
+
+Return JSON only:
+{{"resolutions": [{{"hash": "a1b2c3d4", "status": "done", "reason": "one line naming the specific match"}}]}}
+or
+{{"resolutions": []}}"""
+
+RESOLVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "resolutions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "hash": {"type": "string"},
+                    "status": {"type": "string", "enum": ["done", "cancelled"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["hash", "status", "reason"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["resolutions"],
     "additionalProperties": False,
 }
 
@@ -136,7 +241,8 @@ def _verify_unit(provider, user_message: str, assistant_message: str, unit: dict
     committing something unverified, since the whole point of this stage
     is trustworthiness, not maximizing recall."""
     prompt = VERIFY_PROMPT.format(
-        user_message=user_message, assistant_message=assistant_message, content=unit["content"],
+        user_message=user_message, assistant_message=assistant_message,
+        content=unit["content"], unit_type=unit.get("unit_type", "unknown"),
     )
     try:
         if provider.supports_structured_output:
@@ -187,6 +293,10 @@ def extract_units(provider, user_message: str, assistant_message: str,
                 u["branch"] = "main"
             if u.get("supersedes") is None:
                 u.pop("supersedes", None)
+            if u.get("deadline") is None:
+                u.pop("deadline", None)
+            if u.get("unit_type") == "commitment":
+                u["commitment_status"] = "open"
     except Exception as e:
         logger.warning(f"extract_units failed to parse: {e!r}")
         return []
@@ -203,19 +313,100 @@ def extract_units(provider, user_message: str, assistant_message: str,
     return verified
 
 
+def find_open_commitments(branch: str) -> list[dict]:
+    """Every currently-open commitment on a branch, regardless of
+    deadline. Deterministic; no LLM call."""
+    try:
+        r = client.get("/commitments/open", params={"branch": branch})
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.warning(f"find_open_commitments failed for branch={branch!r}: {e!r}")
+        return []
+
+def find_due_commitments(branch: str, within_hours: int = 48) -> list[dict]:
+    """Every currently-open commitment on a branch whose deadline falls
+    within the next `within_hours` — the surfacing/reminder side of this
+    feature, distinct from find_open_commitments (which ignores deadline
+    entirely and is used only for resolution-matching). Deterministic;
+    no LLM call."""
+    within = (datetime.now(timezone.utc) + timedelta(hours=within_hours)).isoformat()
+    try:
+        r = client.get("/commitments/due", params={"branch": branch, "within": within})
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.warning(f"find_due_commitments failed for branch={branch!r}: {e!r}")
+        return []
+
+def _open_commitments_block(units: list[dict]) -> str:
+    return "\n".join(f"- [{u['hash'][:8]}] {u['content']}" for u in units)
+
+
+def detect_commitment_resolutions(provider, user_message: str, assistant_message: str,
+                                   open_commitments: list[dict]) -> list[dict]:
+    """Bounded judgment over a pre-narrowed candidate set — never scans
+    the whole memory store, only whatever's already deterministically
+    known to be open. Skips the LLM call entirely if there's nothing open
+    to resolve, at zero cost. Returns [{"unit": <full open commitment
+    dict>, "status": "done"|"cancelled"}]."""
+    if not open_commitments:
+        return []
+
+    logger.info(f"resolve candidates ({len(open_commitments)}): "
+                f"{[(u['hash'][:8], u['content']) for u in open_commitments]}")
+
+    prompt = RESOLVE_PROMPT.format(
+        open_commitments=_open_commitments_block(open_commitments),
+        user_message=user_message, assistant_message=assistant_message,
+    )
+
+    try:
+        if provider.supports_structured_output:
+            result = provider.complete_json(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": "Resolve."}],
+                CAPTURE_MODEL, schema=RESOLVE_SCHEMA, schema_name="commitment_resolve",
+            )
+        else:
+            raw = "".join(provider.stream(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": "Resolve."}],
+                CAPTURE_MODEL,
+            ))
+            result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+
+        logger.info(f"commitment resolve: result={result}")
+        resolutions = result.get("resolutions", [])
+        for r in resolutions:
+            logger.info(f"  resolution reasoning: hash={r.get('hash')} status={r.get('status')} reason={r.get('reason')!r}")
+    except Exception as e:
+        logger.warning(f"detect_commitment_resolutions failed: {e!r} — resolving nothing (fail closed)")
+        return []
+
+    out = []
+
+    for r in resolutions:
+        unit = next((u for u in open_commitments if u["hash"].startswith(r.get("hash", ""))), None)
+        if unit:
+            out.append({"unit": unit, "status": r["status"]})
+    return out
+
+
 def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
     try:
-        r = client.post(
-            "/remember",
-            json={
-                "content": unit["content"],
-                "unit_type": unit["unit_type"],
-                "provenance": unit["provenance"],
-                "source": source,
-                "summary": unit.get("summary", unit["content"]),
-                "branch": branch,
-            },
-        )
+        payload = {
+            "content": unit["content"],
+            "unit_type": unit["unit_type"],
+            "provenance": unit["provenance"],
+            "source": source,
+            "summary": unit.get("summary", unit["content"]),
+            "branch": branch,
+        }
+        if unit.get("deadline"):
+            payload["deadline"] = unit["deadline"]
+        if unit.get("commitment_status"):
+            payload["commitment_status"] = unit["commitment_status"]
+
+        r = client.post("/remember", json=payload)
         r.raise_for_status()
         invalidate_state_cache(branch)
         return True
@@ -225,24 +416,45 @@ def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
 
 def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main") -> bool:
     try:
-        r = client.post(
-            "/supersede",
-            json={
-                "from": from_hash,
-                "content": unit["content"],
-                "unit_type": unit["unit_type"],
-                "provenance": unit["provenance"],
-                "source": source,
-                "summary": unit.get("summary", unit["content"]),
-                "branch": branch,
-            },
-        )
+        payload = {
+            "from": from_hash,
+            "content": unit["content"],
+            "unit_type": unit["unit_type"],
+            "provenance": unit["provenance"],
+            "source": source,
+            "summary": unit.get("summary", unit["content"]),
+            "branch": branch,
+        }
+        if unit.get("deadline"):
+            payload["deadline"] = unit["deadline"]
+        if unit.get("commitment_status"):
+            payload["commitment_status"] = unit["commitment_status"]
+
+        r = client.post("/supersede", json=payload)
         r.raise_for_status()
         invalidate_state_cache(branch)
         return True
     except Exception as e:
         logger.warning(f"supersede_unit failed for {from_hash!r}: {e!r}")
         return False
+
+
+def resolve_commitment(resolution: dict, source: str, branch: str) -> bool:
+    """Marks an open commitment done/cancelled by superseding it with the
+    same content under a new status — same versioning model every other
+    update already uses; the old "open" version stays in history,
+    genuinely resolved, not deleted."""
+    unit = resolution["unit"]
+    updated = {
+        "content": unit["content"],
+        "unit_type": "commitment",
+        "provenance": unit.get("provenance", "stated"),
+        "summary": f"Commitment marked {resolution['status']}: {unit['content']}",
+        "deadline": unit.get("deadline"),
+        "commitment_status": resolution["status"],
+    }
+    return supersede_unit(unit["hash"], updated, source, branch)
+
 
 def forget_unit(unit_hash: str, source: str, branch: str, summary: str) -> bool:
     """Soft-forget: drops the unit from HEAD, keeps it in history."""

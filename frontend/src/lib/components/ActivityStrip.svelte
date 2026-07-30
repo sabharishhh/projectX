@@ -25,7 +25,11 @@
           <span class={u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}>
             {u.content}
           </span>
-          <span class="technical type">{u.unit_type}</span>
+          {#if u.deadline}
+            <span class="technical type">due {new Date(u.deadline).toLocaleDateString()}</span>
+          {:else}
+            <span class="technical type">{u.unit_type}</span>
+          {/if}
         </li>
       {/each}
     </ul>

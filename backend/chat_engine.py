@@ -13,7 +13,10 @@ import agentic_search
 import skills as skill_registry
 
 import search_decision as search_decision_module
-from capture import extract_units, commit_unit
+from capture import (
+    extract_units, commit_unit, find_open_commitments,
+    find_due_commitments, detect_commitment_resolutions, resolve_commitment,
+)
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message, fetch_state_at_time
 from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
 from state import provider, model, PENDING, PENDING_FORGETS, MAIN_REASONING_EFFORT
@@ -106,6 +109,19 @@ def _fetch_relevant(message: str, skill: dict | None, allowed_branches: list[str
     return all_candidates[:12], per_branch_debug
 
 
+def _fetch_due_commitments(allowed_branches: list[str]) -> list[dict]:
+    """Deterministic, no LLM — every currently-open commitment across
+    allowed branches whose deadline falls within the surfacing window
+    (find_due_commitments' default). Same per-branch concurrency pattern
+    as _fetch_known/_fetch_relevant. This is the "what's coming up"
+    surfacing side of the feature — distinct from find_open_commitments,
+    which ignores deadline entirely and is only used for resolution-
+    matching in _process_commitment_resolutions below."""
+    with ThreadPoolExecutor(max_workers=max(len(allowed_branches), 1)) as pool:
+        futures = {b: pool.submit(find_due_commitments, b) for b in allowed_branches}
+        return [{**u, "branch": b} for b in allowed_branches for u in futures[b].result()]
+
+
 # --- Phase: conversation assembly ---
 
 def _build_forget_context(forget_matches: list[dict], message: str) -> dict | None:
@@ -133,17 +149,41 @@ def _build_forget_context(forget_matches: list[dict], message: str) -> dict | No
     return None
 
 
+def _build_commitment_context(due_commitments: list[dict]) -> dict | None:
+    """Injects due-soon open commitments as a system-stated fact the model
+    can naturally weave in — never a mandate to mention every one, and
+    never something the model has to independently judge is true, since
+    the deterministic due-check already established that."""
+    if not due_commitments:
+        return None
+    lines = "; ".join(
+        f'"{c["content"]}"' + (f' (due {c["deadline"]})' if c.get("deadline") else "")
+        for c in due_commitments
+    )
+    return {
+        "role": "system",
+        "content": (
+            f"The user has open commitments coming due soon: {lines}. If one is "
+            "naturally relevant to this exchange, you may mention it — don't force "
+            "it into an unrelated conversation, and don't recite the whole list "
+            "mechanically."
+        ),
+    }
+
+
 def _build_conversation(conversation_id: str, message: str, skill: dict | None,
                          injected: list[dict], forget_matches: list[dict],
-                         history: list[dict]) -> list[dict]:
+                         due_commitments: list[dict], history: list[dict]) -> list[dict]:
     """Windowed history + rolling summary, replacing full unwindowed history."""
     visible_history = history[-summarization.WINDOW_MESSAGES:]
     summary = summarization.get_current_summary(conversation_id)
     forget_context = _build_forget_context(forget_matches, message)
+    commitment_context = _build_commitment_context(due_commitments)
 
     return [build_system_message(injected, (skill or {}).get("system_prompt"))] \
         + ([{"role": "system", "content": f"Summary of earlier conversation:\n{summary}"}] if summary else []) \
         + ([forget_context] if forget_context else []) \
+        + ([commitment_context] if commitment_context else []) \
         + to_provider_messages(visible_history) \
         + [{"role": "user", "content": message}]
 
@@ -226,7 +266,12 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
 
     Yields memory_write/conflict SSE activity events, mutates
     activity_log. Returns the conflicts list — the caller needs it to
-    build conflicted_hashes for the forget-processing phase after this."""
+    build conflicted_hashes for the forget-processing phase after this.
+
+    New commitments are captured here through the same path as any other
+    fact — extract_units/commit_unit already carry deadline/
+    commitment_status through unchanged, nothing commitment-specific
+    needed in this function itself."""
     units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches)
     added, conflicts = [], []
 
@@ -310,15 +355,47 @@ def _process_forgets(conversation_id: str, forget_matches: list[dict],
         ledger.log("forget_requested", f"candidate: {m['unit']['content']}", conversation_id, actor="system")
 
 
+# --- Phase: commitment resolution ---
+
+def _process_commitment_resolutions(conversation_id: str, message: str, full_response: str,
+                                     allowed_branches: list[str], activity_log: list[dict]):
+    """Deterministic candidate-gathering (every currently-open commitment
+    across allowed branches, regardless of deadline) followed by one
+    bounded LLM judgment over that pre-narrowed set — mirrors the
+    forget-pipeline's pattern-then-confirm shape exactly. Skips the LLM
+    call entirely, at zero cost, when there's nothing open to resolve.
+    Yields commitment_resolved activity events, mutates activity_log."""
+    open_commitments = []
+    for b in allowed_branches:
+        open_commitments.extend({**u, "branch": b} for u in find_open_commitments(b))
+
+    if not open_commitments:
+        return
+
+    resolutions = detect_commitment_resolutions(provider, message, full_response, open_commitments)
+    for r in resolutions:
+        branch = r["unit"].get("branch", "main")
+        if resolve_commitment(r, conversation_id, branch):
+            ev = {
+                "kind": "commitment_resolved",
+                "label": f"{r['status'].capitalize()}: {r['unit']['content']}",
+                "content": r["unit"]["content"],
+                "status": r["status"],
+            }
+            activity_log.append(ev)
+            yield _sse({"type": "activity", "event": ev})
+            ledger.log("commitment_resolved", f"{r['status']}: {r['unit']['content']}",
+                       conversation_id, actor="system")
+
+
 # --- Orchestration ---
 
 def stream_chat(conversation_id: str, message: str):
     """Generator yielding SSE-formatted strings for one chat turn: memory
     injection, skill selection, optional search, the streamed reply, then
-    capture (facts, conflicts, forget requests). Each phase above is a
-    focused function; this orchestrator sequences them and owns the
-    state that carries between phases — same behavior as before the
-    split, just no longer one ~300-line function."""
+    capture (facts, conflicts, forget requests, commitment resolutions).
+    Each phase above is a focused function; this orchestrator sequences
+    them and owns the state that carries between phases."""
     history = load_messages(conversation_id)
     save_message(conversation_id, "user", message)
 
@@ -331,6 +408,7 @@ def stream_chat(conversation_id: str, message: str):
 
     known = _fetch_known(allowed_branches)
     forget_matches = forgetting.detect_forget_request(provider, message, known, allowed_branches)
+    due_commitments = _fetch_due_commitments(allowed_branches)
 
     if time_travel_target:
         tt_results = [fetch_state_at_time(b, time_travel_target) for b in allowed_branches]
@@ -350,7 +428,7 @@ def stream_chat(conversation_id: str, message: str):
         ],
     })
 
-    conversation = _build_conversation(conversation_id, message, skill, injected, forget_matches, history)
+    conversation = _build_conversation(conversation_id, message, skill, injected, forget_matches, due_commitments, history)
 
     ledger.log("provider_call", f"model={model}", conversation_id, actor="user")
     if skill:
@@ -381,6 +459,15 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
+    if due_commitments:
+        ev = {
+            "kind": "commitments_due",
+            "label": f"{len(due_commitments)} commitment{'s' if len(due_commitments) != 1 else ''} coming due",
+            "units": due_commitments,
+        }
+        activity_log.append(ev)
+        yield _sse({"type": "activity", "event": ev})
+
     full_response, errored = yield from _generate_reply(
         conversation_id, conversation, skill, search_decision, activity_log,
     )
@@ -391,6 +478,9 @@ def stream_chat(conversation_id: str, message: str):
         conversation_id, message, full_response, known, allowed_branches, forget_matches, activity_log,
     )
     yield from _process_forgets(conversation_id, forget_matches, conflicts, activity_log)
+    yield from _process_commitment_resolutions(
+        conversation_id, message, full_response, allowed_branches, activity_log,
+    )
 
     persisted_activity = [a for a in activity_log if a["kind"] != "skill"]
     save_message(conversation_id, "assistant", full_response, persisted_activity)

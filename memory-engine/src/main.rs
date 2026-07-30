@@ -40,6 +40,10 @@ struct RememberRequest {
     summary: String,
     #[serde(default = "default_branch")]
     branch: String,
+    #[serde(default)]
+    deadline: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    commitment_status: Option<memory_engine::CommitmentStatus>,
 }
 
 #[derive(Deserialize)]
@@ -52,6 +56,10 @@ struct SupersedeRequest {
     summary: String,
     #[serde(default = "default_branch")]
     branch: String,
+    #[serde(default)]
+    deadline: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    commitment_status: Option<memory_engine::CommitmentStatus>,
 }
 
 #[derive(Deserialize)]
@@ -71,10 +79,20 @@ struct UnitView {
 }
 
 #[derive(Serialize)]
+struct ChangeView {
+    #[serde(flatten)]
+    change: UnitChange,
+    unit_type: Option<UnitType>,
+}
+
+#[derive(Serialize)]
 struct CommitView {
     hash: String,
-    #[serde(flatten)]
-    commit: Commit,
+    parent: Option<String>,
+    changes: Vec<ChangeView>,
+    source: String,
+    summary: String,
+    created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Deserialize)]
@@ -153,6 +171,13 @@ struct SearchQuery {
     branch: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct CommitmentsDueQuery {
+    #[serde(default = "default_branch")]
+    branch: String,
+    within: chrono::DateTime<chrono::Utc>,
+}
+
 type ApiError = (StatusCode, String);
 
 
@@ -194,7 +219,11 @@ async fn remember(
     Json(req): Json<RememberRequest>,
 ) -> Result<Json<UnitView>, ApiError> {
     check_branch(&req.branch)?;
-    let unit = MemoryUnit::new(req.content, req.unit_type, req.provenance, req.source.clone());
+
+    let mut unit = MemoryUnit::new(req.content, req.unit_type, req.provenance, req.source.clone());
+    unit.deadline = req.deadline;
+    unit.commitment_status = req.commitment_status;
+
     let hash = app.store.put(&unit).map_err(internal)?;
 
     let app2 = app.clone();
@@ -223,7 +252,11 @@ async fn supersede(
     Json(req): Json<SupersedeRequest>,
 ) -> Result<Json<UnitView>, ApiError> {
     check_branch(&req.branch)?;
-    let unit = MemoryUnit::new(req.content, req.unit_type, req.provenance, req.source.clone());
+
+    let mut unit = MemoryUnit::new(req.content, req.unit_type, req.provenance, req.source.clone());
+    unit.deadline = req.deadline;
+    unit.commitment_status = req.commitment_status;
+
     let hash = app.store.put(&unit).map_err(internal)?;
 
     let app2 = app.clone();
@@ -352,7 +385,30 @@ async fn history(
         None => return Ok(Json(Vec::new())),
     };
     let commits = app.store.history(&head).map_err(internal)?;
-    Ok(Json(commits.into_iter().map(|(hash, commit)| CommitView { hash, commit }).collect()))
+
+    let mut out = Vec::with_capacity(commits.len());
+    for (hash, commit) in commits {
+        let mut changes = Vec::with_capacity(commit.changes.len());
+        for change in commit.changes {
+            // Best-effort: falls back to None rather than failing the whole
+            // response if a referenced unit's content is unreachable (e.g.
+            // an old purged hash) — type display degrades gracefully, the
+            // timeline itself never breaks over one unresolvable entry.
+            let lookup_hash = match &change {
+                UnitChange::Added { hash } => Some(hash.clone()),
+                UnitChange::Modified { to, .. } => Some(to.clone()),
+                UnitChange::Superseded { hash } => Some(hash.clone()),
+            };
+            let unit_type = lookup_hash.and_then(|h| app.store.get(&h).ok().map(|u| u.unit_type));
+            changes.push(ChangeView { change, unit_type });
+        }
+        out.push(CommitView {
+            hash, parent: commit.parent, changes,
+            source: commit.source, summary: commit.summary, created_at: commit.created_at,
+        });
+    }
+
+    Ok(Json(out))
 }
 
 /// Dev-only: wipes every branch, not just one.
@@ -373,6 +429,24 @@ async fn state_at_time(
         })),
         None => Ok(Json(StateAtTimeResponse { resolved_at: None, units: vec![] })),
     }
+}
+
+async fn commitments_open(
+    State(app): State<Arc<AppState>>,
+    Query(q): Query<BranchQuery>,
+) -> Result<Json<Vec<UnitView>>, ApiError> {
+    check_branch(&q.branch)?;
+    let units = app.store.open_commitments(&q.branch).map_err(internal)?;
+    Ok(Json(units.into_iter().map(|(hash, unit)| UnitView { hash, unit }).collect()))
+}
+
+async fn commitments_due(
+    State(app): State<Arc<AppState>>,
+    Query(q): Query<CommitmentsDueQuery>,
+) -> Result<Json<Vec<UnitView>>, ApiError> {
+    check_branch(&q.branch)?;
+    let units = app.store.open_commitments_due(&q.branch, q.within).map_err(internal)?;
+    Ok(Json(units.into_iter().map(|(hash, unit)| UnitView { hash, unit }).collect()))
 }
 
 /// What merging `from` into `into` would bring over. Read-only.
@@ -480,6 +554,8 @@ async fn main() {
         .route("/purge", post(purge))
         .route("/search", get(memory_search))
         .route("/state-at-time", post(state_at_time))
+        .route("/commitments/due", get(commitments_due))
+        .route("/commitments/open", get(commitments_open))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 
