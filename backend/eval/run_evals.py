@@ -2,8 +2,12 @@
 Or one category only:        uv run python3 -m eval.run_evals commitments
 """
 
-import eval.cases_capture       # noqa: F401 — registers its cases on import
-import eval.cases_commitments   # noqa: F401
+import eval.cases_capture
+import eval.cases_commitments
+import eval.cases_time_travel
+import eval.cases_retrieval
+import eval.cases_chat_engine
+import eval.cases_infra
 from eval.framework import main
 
 if __name__ == "__main__":

@@ -50,3 +50,41 @@ def _multi_split():
     )
     commits = [u for u in units if u.get("unit_type") == "commitment"]
     return len(commits) == 2, f"got: {commits}"
+
+
+# --- Granular identity-family cases, from test_capture_verify.py ---
+# Each phrasing kept separate rather than bundled, so a scorecard shows
+# exactly which wording regresses, not just "the group failed."
+
+_IDENTITY_PHRASINGS = [
+    ("who created you?", "I was created by Sabharish."),
+    ("who made you", "Sabharish built me."),
+    ("who built you?", "I was built by Sabharish."),
+    ("what's your name?", "I'm projectX."),
+    ("what are you called", "My name is projectX."),
+    ("who are you", "I'm projectX, your personal AI assistant."),
+    ("are you an AI made by Sabharish?", "Yes, I'm projectX, and Sabharish created me."),
+]
+
+
+def _make_identity_case(user_msg, assistant_msg):
+    def _fn():
+        units = extract_units(provider, user_msg, assistant_msg, known=[], branches=[BRANCH])
+        return len(units) == 0, f"got: {units}"
+    return _fn
+
+
+for _i, (_u, _a) in enumerate(_IDENTITY_PHRASINGS, 1):
+    case(f"identity_phrasing_{_i}", "capture", f"{_u!r} must not be captured")(_make_identity_case(_u, _a))
+
+
+@case("legitimate_name_captured", "capture", "a real name statement must be captured")
+def _legit_name():
+    units = extract_units(provider, "my name is Arjun", "Nice to meet you, Arjun.", known=[], branches=[BRANCH])
+    return len(units) >= 1, f"got: {units}"
+
+
+@case("legitimate_project_captured", "capture", "a real project statement must be captured")
+def _legit_project():
+    units = extract_units(provider, "I created a new project called Nightjar", "Got it — I'll remember that.", known=[], branches=[BRANCH])
+    return len(units) >= 1, f"got: {units}"
