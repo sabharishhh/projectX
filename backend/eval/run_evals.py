@@ -8,6 +8,7 @@ import eval.cases_time_travel
 import eval.cases_retrieval
 import eval.cases_chat_engine
 import eval.cases_infra
+import eval.cases_forgetting
 from eval.framework import main
 
 if __name__ == "__main__":
