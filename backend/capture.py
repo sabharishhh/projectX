@@ -99,6 +99,30 @@ VERIFY_SCHEMA = {
     "additionalProperties": False,
 }
 
+CAPTURE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "units": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "unit_type": {"type": "string", "enum": ["identity", "preference", "project", "decision", "relationship"]},
+                    "provenance": {"type": "string", "enum": ["stated", "inferred"]},
+                    "summary": {"type": "string"},
+                    "branch": {"type": "string"},
+                    "supersedes": {"type": ["string", "null"]},
+                },
+                "required": ["content", "unit_type", "provenance", "summary", "branch", "supersedes"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["units"],
+    "additionalProperties": False,
+}
+
 
 def _known_facts_block(units: list[dict]) -> str:
     if not units:
@@ -144,15 +168,25 @@ def extract_units(provider, user_message: str, assistant_message: str,
     exchange = f"User: {user_message}\n\nAssistant: {assistant_message}"
 
     try:
-        raw = "".join(provider.stream(
-            [{"role": "system", "content": prompt}, {"role": "user", "content": exchange}],
-            CAPTURE_MODEL,
-        ))
-        parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-        units = parsed.get("units", [])
+        if provider.supports_structured_output:
+            result = provider.complete_json(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": exchange}],
+                CAPTURE_MODEL, schema=CAPTURE_SCHEMA, schema_name="capture_units",
+            )
+            units = result.get("units", [])
+        else:
+            raw = "".join(provider.stream(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": exchange}],
+                CAPTURE_MODEL,
+            ))
+            parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+            units = parsed.get("units", [])
+
         for u in units:
             if u.get("branch") not in branches:
                 u["branch"] = "main"
+            if u.get("supersedes") is None:
+                u.pop("supersedes", None)
     except Exception as e:
         logger.warning(f"extract_units failed to parse: {e!r}")
         return []
