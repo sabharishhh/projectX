@@ -136,6 +136,18 @@ struct RetrievedUnitView {
 }
 
 #[derive(Deserialize)]
+struct StateAtTimeRequest {
+    branch: String,
+    target: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Serialize)]
+struct StateAtTimeResponse {
+    resolved_at: Option<chrono::DateTime<chrono::Utc>>,
+    units: Vec<UnitView>,
+}
+
+#[derive(Deserialize)]
 struct SearchQuery {
     pattern: String,
     branch: Option<String>,
@@ -349,6 +361,20 @@ async fn reset(State(app): State<Arc<AppState>>) -> Result<Json<serde_json::Valu
     Ok(Json(serde_json::json!({ "reset": true })))
 }
 
+async fn state_at_time(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<StateAtTimeRequest>,
+) -> Result<Json<StateAtTimeResponse>, ApiError> {
+    check_branch(&req.branch)?;
+    match app.store.state_at_time(&req.branch, req.target).map_err(internal)? {
+        Some((resolved_at, units)) => Ok(Json(StateAtTimeResponse {
+            resolved_at: Some(resolved_at),
+            units: units.into_iter().map(|(hash, unit)| UnitView { hash, unit }).collect(),
+        })),
+        None => Ok(Json(StateAtTimeResponse { resolved_at: None, units: vec![] })),
+    }
+}
+
 /// What merging `from` into `into` would bring over. Read-only.
 async fn merge_preview(
     State(app): State<Arc<AppState>>,
@@ -453,6 +479,7 @@ async fn main() {
         .route("/merge/apply", post(merge_apply))
         .route("/purge", post(purge))
         .route("/search", get(memory_search))
+        .route("/state-at-time", post(state_at_time))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 

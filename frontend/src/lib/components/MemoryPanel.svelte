@@ -270,14 +270,6 @@
 
   .empty { margin:0; font-size:var(--size-meta); font-style:italic; color:var(--text-secondary); }
 
-  .graph-note {
-    margin: 0 0 var(--space-3);
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    font-style: italic;
-    line-height: 1.4;
-  }
-
   .graph-scroll {
     overflow-x: auto;
     overflow-y: visible;

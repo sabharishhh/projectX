@@ -7,13 +7,14 @@ import chatlog
 import branching
 import threading
 import forgetting
+import time_travel
 import summarization
 import agentic_search
 import skills as skill_registry
 
 import search_decision as search_decision_module
 from capture import extract_units, commit_unit
-from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message
+from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message, fetch_state_at_time
 from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
 from state import provider, model, PENDING, PENDING_FORGETS, MAIN_REASONING_EFFORT
 
@@ -326,9 +327,19 @@ def stream_chat(conversation_id: str, message: str):
     existing_branches = fetch_branches()
     allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
 
+    time_travel_target = time_travel.detect_time_travel_query(provider, message)
+
     known = _fetch_known(allowed_branches)
     forget_matches = forgetting.detect_forget_request(provider, message, known, allowed_branches)
-    injected, per_branch_debug = _fetch_relevant(message, skill, allowed_branches)
+
+    if time_travel_target:
+        tt_results = [fetch_state_at_time(b, time_travel_target) for b in allowed_branches]
+        tt_units = [u for r in tt_results for u in r["units"]]
+        resolved_dates = [r["resolved_at"] for r in tt_results if r["resolved_at"]]
+        injected = tt_units[:12]
+        per_branch_debug = {}  # historical path doesn't populate the normal retrieval trace
+    else:
+        injected, per_branch_debug = _fetch_relevant(message, skill, allowed_branches)
 
     save_retrieval_trace(conversation_id, message, {
         "allowed_branches": allowed_branches,
@@ -352,7 +363,16 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
-    if injected:
+    if time_travel_target:
+        actual_date = min(resolved_dates) if resolved_dates else time_travel_target
+        ev = {
+            "kind": "time_travel",
+            "label": f"Looking back to {actual_date}",
+            "units": injected,
+        }
+        activity_log.append(ev)
+        yield _sse({"type": "activity", "event": ev})
+    elif injected:
         ev = {
             "kind": "memory_read",
             "label": f"Recalled {len(injected)} {'fact' if len(injected) == 1 else 'facts'}",

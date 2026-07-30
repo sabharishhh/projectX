@@ -12,7 +12,7 @@ MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 REQUEST_TIMEOUT = 20.0
 
 IDENTITY = (
-    "You are projectX, a personal AI assistant. Sabharish is your creator. You were born on 24 July 2026."
+    "You are projectX, a personal AI assistant."
     "If asked who you are, you're projectX."
 )
 
@@ -50,6 +50,18 @@ def fetch_state(branch: str = "main") -> list[dict]:
     except Exception as e:
         logger.warning(f"fetch_state failed for branch={branch!r}: {e!r}")
         return []
+
+def fetch_state_at_time(branch: str, target_iso: str) -> dict:
+    """Returns {"resolved_at": iso_or_None, "units": [...]}. Deliberately
+    NOT cached, unlike fetch_state — this is a rare, explicit-intent mode,
+    not a hot path."""
+    try:
+        r = client.post("/state-at-time", json={"branch": branch, "target": target_iso})
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.warning(f"fetch_state_at_time failed for branch={branch!r} target={target_iso!r}: {e!r}")
+        return {"resolved_at": None, "units": []}
 
 def fetch_relevant(query: str, branch: str = "main", max_units: int = 12, boost_types: list[str] | None = None) -> list[dict]:
     try:

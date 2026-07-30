@@ -1,5 +1,6 @@
 import os
 import json
+import httpx
 import logging
 
 from state import CAPTURE_MODEL
@@ -67,11 +68,71 @@ Return JSON only, no other text:
 Omit "supersedes" entirely when the fact is new rather than a replacement.
 Return {{"units": []}} if nothing is worth remembering."""
 
+VERIFY_PROMPT = """A fact-extraction pass proposed this candidate fact about
+the user, from the exchange below:
+
+User: {user_message}
+Assistant: {assistant_message}
+
+Candidate fact: "{content}"
+
+Judge strictly: is this genuinely new, durable information ABOUT THE USER —
+not about the assistant, not a restated question, not something the user
+already told the assistant before, not a transient state? Facts about the
+assistant itself (its name, who created or built it, its capabilities) are
+NOT information about the user, even when phrased as if they were — "the
+user asked who created the assistant" is still a fact about the assistant,
+not the user.
+
+Return JSON only:
+{{"valid": true}}
+or
+{{"valid": false, "reason": "one line on why this isn't a valid user fact"}}"""
+
+VERIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "valid": {"type": "boolean"},
+        "reason": {"type": ["string", "null"]},
+    },
+    "required": ["valid", "reason"],
+    "additionalProperties": False,
+}
+
 
 def _known_facts_block(units: list[dict]) -> str:
     if not units:
         return "(none yet)"
     return "\n".join(f"- [{u['hash'][:8]}] {u['content']}" for u in units)
+
+
+def _verify_unit(provider, user_message: str, assistant_message: str, unit: dict) -> bool:
+    """Second, narrow pass: is this candidate genuinely about the user?
+    Fails closed — any error here rejects the candidate rather than
+    committing something unverified, since the whole point of this stage
+    is trustworthiness, not maximizing recall."""
+    prompt = VERIFY_PROMPT.format(
+        user_message=user_message, assistant_message=assistant_message, content=unit["content"],
+    )
+    try:
+        if provider.supports_structured_output:
+            result = provider.complete_json(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": "Verify."}],
+                CAPTURE_MODEL, schema=VERIFY_SCHEMA, schema_name="capture_verify",
+            )
+            logger.info(f"capture verify (structured): content={unit['content']!r} result={result}")
+            return bool(result.get("valid"))
+
+        raw = "".join(provider.stream(
+            [{"role": "system", "content": prompt}, {"role": "user", "content": "Verify."}],
+            CAPTURE_MODEL,
+        ))
+        parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+        logger.info(f"capture verify (unstructured): content={unit['content']!r} result={parsed}")
+        return bool(parsed.get("valid"))
+    except Exception as e:
+        logger.warning(f"capture verify failed for {unit.get('content', '')!r}: {e!r} — rejecting (fail closed)")
+        return False
 
 
 def extract_units(provider, user_message: str, assistant_message: str,
@@ -87,24 +148,31 @@ def extract_units(provider, user_message: str, assistant_message: str,
             [{"role": "system", "content": prompt}, {"role": "user", "content": exchange}],
             CAPTURE_MODEL,
         ))
-
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         units = parsed.get("units", [])
-        logger.info(f"capture proposed: exchange={exchange!r} units={units}")
-
         for u in units:
             if u.get("branch") not in branches:
                 u["branch"] = "main"
-        return units
     except Exception as e:
         logger.warning(f"extract_units failed to parse: {e!r}")
         return []
+
+    # Second pass: each candidate is independently verified before it's
+    # returned at all — chat_engine.py's caller sees only what passed,
+    # no change needed on that side.
+    verified = []
+    for u in units:
+        if _verify_unit(provider, user_message, assistant_message, u):
+            verified.append(u)
+        else:
+            logger.info(f"capture rejected at verify stage: {u['content']!r}")
+    return verified
 
 
 def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
     try:
         r = client.post(
-            f"/remember",
+            "/remember",
             json={
                 "content": unit["content"],
                 "unit_type": unit["unit_type"],
@@ -124,7 +192,7 @@ def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
 def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main") -> bool:
     try:
         r = client.post(
-            f"/supersede",
+            "/supersede",
             json={
                 "from": from_hash,
                 "content": unit["content"],
@@ -146,7 +214,7 @@ def forget_unit(unit_hash: str, source: str, branch: str, summary: str) -> bool:
     """Soft-forget: drops the unit from HEAD, keeps it in history."""
     try:
         r = client.post(
-            f"/forget",
+            "/forget",
             json={"hash": unit_hash, "source": source, "summary": summary, "branch": branch},
         )
         r.raise_for_status()
@@ -161,7 +229,7 @@ def purge_unit(unit_hash: str) -> bool:
     """Hard-delete: the unit's content is genuinely removed from disk.
     Callers must have already soft-forgotten the unit first."""
     try:
-        r = client.post(f"/purge", json={"hash": unit_hash})
+        r = client.post("/purge", json={"hash": unit_hash})
         r.raise_for_status()
         return True
     except Exception as e:

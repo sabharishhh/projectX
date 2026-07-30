@@ -309,6 +309,31 @@ impl MemoryStore {
         Ok(())
     }
 
+    /// Resolves state as it was at a specific point in time — walks branch
+    /// history backward from HEAD to find the latest commit at or before
+    /// `target`, then delegates to state_at() (which already benefits from
+    /// checkpointing). Returns the actual commit timestamp used alongside the
+    /// state, since `target` snaps to the nearest real commit at or before
+    /// it, not the exact instant requested — a caller asking "as of March 15"
+    /// needs to know the answer is really "as of the last change before that
+    /// date," not silently pretend precision that doesn't exist.
+    pub fn state_at_time(
+        &self,
+        branch: &str,
+        target: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<(chrono::DateTime<chrono::Utc>, Vec<(String, MemoryUnit)>)>, StoreError> {
+        let mut cursor = self.head(branch)?;
+        while let Some(hash) = cursor {
+            let commit = self.get_commit(&hash)?;
+            if commit.created_at <= target {
+                let state = self.state_at(&hash)?;
+                return Ok(Some((commit.created_at, state)));
+            }
+            cursor = commit.parent.clone();
+        }
+        Ok(None) // nothing existed on this branch at or before `target`
+    }
+
     // --- internals ---
 
     fn put_object<T: Serialize>(&self, value: &T) -> Result<String, StoreError> {
