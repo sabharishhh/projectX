@@ -47,14 +47,26 @@ def _classify(message: str) -> tuple[dict | None, dict | None]:
     classifications of the same message — neither reads the other's
     output — so they run concurrently instead of one after another.
     search_decision fires unconditionally and gets discarded here if the
-    resolved skill turns out to disallow web_search (e.g. the "writing"
-    skill's deny-all tools list) — a small, occasional wasted call traded
-    for latency on every other turn."""
+    resolved skill turns out to disallow web_search. Both futures are
+    read defensively — if either classifier's own internal retry/error
+    handling is ever exhausted (a real, observed failure, not
+    theoretical), that must degrade this turn to "no skill, no search"
+    rather than crash the entire turn with an unhandled exception."""
     with ThreadPoolExecutor(max_workers=2) as pool:
         skill_future = pool.submit(skill_registry.select, provider, message)
         search_decision_future = pool.submit(search_decision_module.should_search, provider, message)
-        skill = skill_future.result()
-        search_decision = search_decision_future.result()
+
+        try:
+            skill = skill_future.result()
+        except Exception as e:
+            ledger.log("classify_failed", f"skill selection failed: {e!r}", "system", actor="system")
+            skill = None
+
+        try:
+            search_decision = search_decision_future.result()
+        except Exception as e:
+            ledger.log("classify_failed", f"search decision failed: {e!r}", "system", actor="system")
+            search_decision = None
 
     if not skill_registry.allows(skill, "web_search"):
         search_decision = None
