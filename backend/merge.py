@@ -1,5 +1,5 @@
 import json
-import httpx
+import os
 
 from memory_client import client
 from memory import invalidate_state_cache
@@ -49,7 +49,7 @@ def find_conflicts(provider, from_branch: str, into_branch: str,
     try:
         raw = "".join(provider.stream(
             [{"role": "system", "content": prompt}, {"role": "user", "content": "Compare."}],
-            "gpt-5.4-mini",
+            os.getenv("CAPTURE_MODEL", "gpt-5.4-mini"),
         ))
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         pairs = parsed.get("conflicts", [])

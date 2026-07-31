@@ -3,7 +3,7 @@ from fastapi import APIRouter
 import db
 import ledger
 from capture import supersede_unit, commit_unit, forget_unit, purge_unit
-from models import ResolveRequest, ForgetResolveRequest
+from models import ResolveRequest, ForgetResolveRequest, DirectDeleteRequest, DirectEditRequest
 from state import PENDING, PENDING_FORGETS
 
 router = APIRouter()
@@ -30,6 +30,17 @@ def resolve_conflict(req: ResolveRequest):
     return {"ok": True}
 
 
+@router.post("/api/memory/delete")
+def delete_unit(req: DirectDeleteRequest):
+    """Manual delete from the memory panel — not tied to a PENDING_FORGETS
+    entry, since there's no LLM proposal here, just direct user action.
+    Soft-forgets, matching every other deletion path in this system —
+    recoverable via Timeline, not gone without a trace."""
+    ok = forget_unit(req.hash, "memory-panel", req.branch, "user manually deleted this from the memory panel")
+    if ok:
+        ledger.log("memory_forgotten", f"manually deleted via panel: {req.hash[:8]}", "memory-panel", actor="user")
+    return {"ok": ok}
+
 @router.post("/api/memory/forget")
 def resolve_forget(req: ForgetResolveRequest):
     p = PENDING_FORGETS.pop(req.forget_id, None)
@@ -50,3 +61,23 @@ def resolve_forget(req: ForgetResolveRequest):
 
     db.mark_forget_status(p["source"], req.forget_id, req.choice)
     return {"ok": True}
+
+@router.post("/api/memory/edit")
+def edit_unit(req: DirectEditRequest):
+    """Edit-in-place maps directly onto supersede — the exact same
+    primitive every other content change in this system uses. No LLM
+    verification pass, unlike normal capture: the user editing their own
+    stored fact IS the authority, nothing to judge. The old version stays
+    fully visible in Timeline, same guarantee as everything else."""
+    unit = {
+        "content": req.new_content,
+        "unit_type": req.unit_type,
+        "provenance": req.provenance,
+        "summary": f"User edited: {req.new_content}",
+        "deadline": req.deadline,
+        "commitment_status": req.commitment_status,
+    }
+    ok = supersede_unit(req.hash, unit, "memory-panel", req.branch)
+    if ok:
+        ledger.log("memory_edited", f"user edited {req.hash[:8]} -> {req.new_content}", "memory-panel", actor="user")
+    return {"ok": ok}

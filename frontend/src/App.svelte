@@ -173,7 +173,9 @@
 
       const results = await Promise.all(
         allBranches.map((b) =>
-          fetch(`${MEMORY_BASE}/state?branch=${encodeURIComponent(b)}`).then((r) => r.json())
+          fetch(`${MEMORY_BASE}/state?branch=${encodeURIComponent(b)}`)
+            .then((r) => r.json())
+            .then((units) => units.map((u) => ({ ...u, branch: b })))
         )
       );
 
@@ -248,6 +250,15 @@
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   });
 
+  async function simulateReveal(msg, fullText) {
+    const chunkSize = 3;
+    const delayMs = 12;
+    for (let idx = 0; idx < fullText.length; idx += chunkSize) {
+      msg.content += fullText.slice(idx, idx + chunkSize);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+
   async function sendMessage(overrideText) {
     // Prioritize override (Enter key), then our sync tracker, then fallback to input
     const text = overrideText ?? latestText ?? input;
@@ -289,10 +300,14 @@
           const ev = JSON.parse(line.slice(6));
 
           if (ev.type === "text") {
-            messages[i].content += ev.value;
             messages[i].activity = messages[i].activity.filter(
-              (a) => a.kind !== "searching" && a.kind !== "skill"
+              (a) => a.kind !== "searching" && a.kind !== "skill" && a.kind !== "correction_check"
             );
+            if (ev.reveal === "simulated") {
+              await simulateReveal(messages[i], ev.value);
+            } else {
+              messages[i].content += ev.value;
+            }
           } else if (ev.type === "activity") {
             if (["search", "search_failed", "memory_read", "memory_write"].includes(ev.event.kind)) {
               messages[i].activity = messages[i].activity.filter(
@@ -341,6 +356,30 @@
     });
     const data = await res.json();
     act.resolved = data.ok ? choice : "expired";
+    if (data.ok) { await loadMemory(); await loadHistory(); }
+  }
+
+  async function deleteMemoryItem(unit) {
+    const res = await fetch(`${API_BASE}/api/memory/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hash: unit.hash, branch: unit.branch }),
+    });
+    const data = await res.json();
+    if (data.ok) { await loadMemory(); await loadHistory(); }
+  }
+
+  async function editMemoryItem(unit, newContent) {
+    const res = await fetch(`${API_BASE}/api/memory/edit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hash: unit.hash, branch: unit.branch, new_content: newContent,
+        unit_type: unit.unit_type, provenance: unit.provenance,
+        deadline: unit.deadline ?? null, commitment_status: unit.commitment_status ?? null,
+      }),
+    });
+    const data = await res.json();
     if (data.ok) { await loadMemory(); await loadHistory(); }
   }
 
@@ -518,7 +557,7 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="resize-handle" onpointerdown={startResize}></div>
       <div class="panel-inner" style="width: {panelWidth}px">
-        <MemoryPanel {memory} {history} onToggle={() => (panelOpen = false)} />
+        <MemoryPanel {memory} {history} onopensource={(sourceId) => console.log("Source clicked:", sourceId)} ondelete={deleteMemoryItem} onedit={editMemoryItem} onToggle={() => (panelOpen = false)} />
       </div>
     </div>
   {/if}

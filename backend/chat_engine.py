@@ -16,6 +16,7 @@ import search_decision as search_decision_module
 from capture import (
     extract_units, commit_unit, find_open_commitments,
     find_due_commitments, detect_commitment_resolutions, resolve_commitment,
+    check_correction_compliance,
 )
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message, fetch_state_at_time
 from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
@@ -182,20 +183,37 @@ def _build_commitment_context(due_commitments: list[dict]) -> dict | None:
         ),
     }
 
+def _build_correction_context(active_corrections: list[dict]) -> dict | None:
+    """Stated explicitly, up front — not because the check downstream
+    can't catch a violation on its own, but because telling the model
+    directly is what makes the check rarely need to fire at all. The
+    check is the guarantee; this is what keeps the guarantee cheap."""
+    if not active_corrections:
+        return None
+    lines = "\n".join(f"- {c['content']}" for c in active_corrections)
+    return {
+        "role": "system",
+        "content": f"You have standing behavioral corrections that MUST be followed "
+                   f"in this reply, without exception:\n{lines}",
+    }
 
 def _build_conversation(conversation_id: str, message: str, skill: dict | None,
                          injected: list[dict], forget_matches: list[dict],
-                         due_commitments: list[dict], history: list[dict]) -> list[dict]:
+                         due_commitments: list[dict], history: list[dict],
+                         active_corrections: list[dict]) -> list[dict]:
     """Windowed history + rolling summary, replacing full unwindowed history."""
     visible_history = history[-summarization.WINDOW_MESSAGES:]
     summary = summarization.get_current_summary(conversation_id)
     forget_context = _build_forget_context(forget_matches, message)
     commitment_context = _build_commitment_context(due_commitments)
 
+    correction_context = _build_correction_context(active_corrections)
+
     return [build_system_message(injected, (skill or {}).get("system_prompt"))] \
         + ([{"role": "system", "content": f"Summary of earlier conversation:\n{summary}"}] if summary else []) \
         + ([forget_context] if forget_context else []) \
         + ([commitment_context] if commitment_context else []) \
+        + ([correction_context] if correction_context else []) \
         + to_provider_messages(visible_history) \
         + [{"role": "user", "content": message}]
 
@@ -204,19 +222,11 @@ def _build_conversation(conversation_id: str, message: str, skill: dict | None,
 
 def _generate_reply(conversation_id: str, conversation: list[dict], skill: dict | None,
                      search_decision: dict | None, activity_log: list[dict]):
-    """Every branch converges on agentic_search — no separate fixed
-    pipeline to route between. web_search/web_fetch are available
-    whenever search_decision found a real need; memory_search is
-    available whenever the skill allows it, independent of that.
-
-    Yields the same SSE-ready dicts stream_chat already streams; mutates
-    activity_log in place, same convention every phase here uses.
-
-    Returns (full_response, errored) via the generator's return value.
-    errored=True means an error was already yielded and the caller must
-    stop the turn immediately — matching the original behavior exactly:
-    on a reply-generation error, capture/conflict/forget/persistence/done
-    are all skipped, not just the reply itself."""
+    """... (docstring unchanged) ...
+    Yields RAW event dicts now, not pre-serialized SSE strings — the
+    caller (_generate_reply_gated) needs to inspect event types to know
+    what to buffer versus forward live. SSE-wrapping now happens exactly
+    once, at that boundary, not scattered across this function too."""
     memory_allowed = skill_registry.allows(skill, "memory_search")
     web_needed = search_decision is not None and skill_registry.allows(skill, "web_fetch")
 
@@ -236,34 +246,101 @@ def _generate_reply(conversation_id: str, conversation: list[dict], skill: dict 
                                              allowed_tools=allowed_tools):
                 if event["type"] == "text":
                     full_response += event["value"]
-                yield _sse(event)
+                yield event
                 if event["type"] == "activity":
                     activity_log.append(event["event"])
         except Exception as e:
-            yield _sse({"type": "error", "message": str(e)})
+            yield {"type": "error", "message": str(e)}
             return full_response, True
     else:
-        # Reached only when the provider can't do tool calling at all (or
-        # no tools are applicable this turn) — a search need with no way
-        # to act on it agentic-ly. Surface that plainly rather than
-        # silently answering as if no search was needed.
         if search_decision:
             ev = {"kind": "search_failed", "label": f"Couldn't search — no tool-calling support available: {search_decision['query']}"}
             activity_log.append(ev)
-            yield _sse({"type": "activity", "event": ev})
+            yield {"type": "activity", "event": ev}
             ledger.log("search_call", f"{search_decision['query']} (0 pages read — no tool support)",
                        conversation_id, actor="system")
 
         try:
             for chunk in provider.stream(conversation, model, reasoning_effort=MAIN_REASONING_EFFORT):
                 full_response += chunk
-                yield _sse({"type": "text", "value": chunk})
+                yield {"type": "text", "value": chunk}
         except Exception as e:
-            yield _sse({"type": "error", "message": str(e)})
+            yield {"type": "error", "message": str(e)}
             return full_response, True
 
     return full_response, False
 
+def _generate_reply_gated(conversation_id: str, conversation: list[dict], skill: dict | None,
+                           search_decision: dict | None, activity_log: list[dict],
+                           active_corrections: list[dict]):
+    """The only function stream_chat calls for reply generation now.
+
+    When active_corrections is empty (the common case), this is a thin
+    pass-through — re-wraps _generate_reply's raw dicts as SSE and
+    forwards them, byte-for-byte the same behavior as calling
+    _generate_reply directly. Zero added latency, zero behavior change.
+
+    When corrections are active: text is buffered instead of streamed
+    live; activity events (search/tool steps) still pass through live,
+    so the wait is never blank. Once generation completes, the buffered
+    reply is checked exactly once. Compliant -> released as one text
+    event, marked for simulated reveal on the frontend. Violated -> one
+    corrective regeneration pass, informed of exactly what was wrong —
+    the flawed first draft is never shown; only the corrected version
+    ever reaches the client."""
+    gen = _generate_reply(conversation_id, conversation, skill, search_decision, activity_log)
+
+    if not active_corrections:
+        while True:
+            try:
+                event = next(gen)
+            except StopIteration as stop:
+                return stop.value
+            yield _sse(event)
+
+    buffered_text = []
+    full_response, errored = "", False
+    while True:
+        try:
+            event = next(gen)
+        except StopIteration as stop:
+            full_response, errored = stop.value
+            break
+        if event["type"] == "text":
+            buffered_text.append(event["value"])
+        elif event["type"] == "error":
+            yield _sse(event)
+            return "".join(buffered_text), True
+        else:
+            yield _sse(event)
+
+    if errored:
+        return full_response, True
+
+    check = check_correction_compliance(provider, active_corrections, full_response)
+    if check.get("compliant", True):
+        yield _sse({"type": "text", "value": full_response, "reveal": "simulated"})
+        return full_response, False
+
+    guidance = check.get("guidance") or "Revise to follow the standing corrections exactly."
+    corrective_conversation = conversation + [
+        {"role": "assistant", "content": full_response},
+        {"role": "system", "content": f"That reply violated a standing correction: {guidance} "
+                                        "Regenerate a corrected reply from scratch — don't reference "
+                                        "or apologize for the previous draft, the user never saw it."},
+    ]
+    try:
+        corrected = "".join(provider.stream(corrective_conversation, model, reasoning_effort=MAIN_REASONING_EFFORT))
+    except Exception as e:
+        # Regeneration itself failed — serve the original imperfect draft
+        # rather than give the user nothing at all.
+        ledger.log("correction_regen_failed", f"{e!r} — serving original draft", conversation_id, actor="system")
+        yield _sse({"type": "text", "value": full_response, "reveal": "simulated"})
+        return full_response, False
+
+    yield _sse({"type": "text", "value": corrected, "reveal": "simulated"})
+    ledger.log("correction_enforced", f"guidance={guidance}", conversation_id, actor="system")
+    return corrected, False
 
 # --- Phase: capture (facts + conflicts) ---
 
@@ -419,6 +496,7 @@ def stream_chat(conversation_id: str, message: str):
     time_travel_target = time_travel.detect_time_travel_query(provider, message)
 
     known = _fetch_known(allowed_branches)
+    active_corrections = [u for u in known if u.get("unit_type") == "correction"]
     forget_matches = forgetting.detect_forget_request(provider, message, known, allowed_branches)
     due_commitments = _fetch_due_commitments(allowed_branches)
 
@@ -440,7 +518,7 @@ def stream_chat(conversation_id: str, message: str):
         ],
     })
 
-    conversation = _build_conversation(conversation_id, message, skill, injected, forget_matches, due_commitments, history)
+    conversation = _build_conversation(conversation_id, message, skill, injected, forget_matches, due_commitments, history, active_corrections)
 
     ledger.log("provider_call", f"model={model}", conversation_id, actor="user")
     if skill:
@@ -480,11 +558,19 @@ def stream_chat(conversation_id: str, message: str):
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
-    full_response, errored = yield from _generate_reply(
-        conversation_id, conversation, skill, search_decision, activity_log,
+    if active_corrections:
+        ev = {"kind": "correction_check",
+              "label": f"Checking against {len(active_corrections)} standing correction{'s' if len(active_corrections) != 1 else ''}..."}
+        activity_log.append(ev)
+        yield _sse({"type": "activity", "event": ev})
+
+    full_response, errored = yield from _generate_reply_gated(
+        conversation_id, conversation, skill, search_decision, activity_log, active_corrections,
     )
     if errored:
         return
+
+    print(f"DEBUG full_response length: {len(full_response)!r}, first 80 chars: {full_response[:80]!r}")
 
     conflicts = yield from _process_capture(
         conversation_id, message, full_response, known, allowed_branches, forget_matches, activity_log,

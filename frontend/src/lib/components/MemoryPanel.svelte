@@ -2,14 +2,16 @@
   import Collapsible from './Collapsible.svelte';
   import { reveal } from '$lib/motion.js';
 
-  let { memory = [], history = [], onopensource = () => {}, onToggle } = $props();
+  let { memory = [], history = [], onopensource = () => {}, ondelete = () => {}, onedit = () => {}, onToggle } = $props();
 
   let view = $state('current'); // 'current' | 'timeline'
   let selectedEntry = $state(null);
   let hoveredHash = $state(null);
   let tooltipAlign = $state('center'); // 'center' | 'left' | 'right'
+  let editingHash = $state(null);
+  let editDraft = $state('');
 
-  const ORDER = ['identity', 'preference', 'project', 'decision', 'relationship', 'commitment'];
+  const ORDER = ['identity', 'preference', 'project', 'decision', 'relationship', 'commitment', 'correction'];
   const grouped = $derived(
     ORDER.map((type) => ({
       type,
@@ -47,6 +49,25 @@
     const days = Math.floor(hours / 24);
     if (days < 30) return `${days}d ago`;
     return new Date(iso).toLocaleDateString();
+  }
+
+  function startEdit(u) {
+    editingHash = u.hash;
+    editDraft = u.content;
+  }
+
+  function cancelEdit() {
+    editingHash = null;
+    editDraft = '';
+  }
+
+  function saveEdit(u) {
+    const trimmed = editDraft.trim();
+    if (trimmed && trimmed !== u.content) {
+      onedit(u, trimmed);
+    }
+    editingHash = null;
+    editDraft = '';
   }
 
   // --- graph layout ---
@@ -87,17 +108,12 @@
     });
   });
 
-  // Measures the hovered node against the actual scrollable container at
-  // hover time — accounts for real scroll position, unlike a purely
-  // static x-vs-graphWidth check, which is why last version's tooltip
-  // could still clip: whether a node is "near an edge" depends on the
-  // CURRENT scroll offset, not just its absolute position in the data.
   function handleNodeHover(event, hash) {
     hoveredHash = hash;
     const nodeRect = event.currentTarget.getBoundingClientRect();
     const container = event.currentTarget.closest('.graph-scroll');
     const containerRect = container.getBoundingClientRect();
-    const tooltipHalfWidth = 120; // ~ max-width 14rem / 2, plus a little margin
+    const tooltipHalfWidth = 120;
 
     if (nodeRect.left - tooltipHalfWidth < containerRect.left) {
       tooltipAlign = 'left';
@@ -146,17 +162,39 @@
           <ul>
             {#each group.items as u (u.hash)}
               <li in:reveal class:inferred={u.provenance === 'inferred'}>
-                <span
-                  class="content {u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}"
-                >
-                  {u.content}
-                </span>
-                {#if u.deadline}
-                  <span class="technical type">due {new Date(u.deadline).toLocaleDateString()}</span>
+                {#if editingHash === u.hash}
+                  <div class="edit-row">
+                    <textarea
+                      class="edit-input"
+                      bind:value={editDraft}
+                      rows="2"
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(u); }
+                        if (e.key === 'Escape') cancelEdit();
+                      }}
+                    ></textarea>
+                    <div class="edit-actions">
+                      <button class="edit-save" onclick={() => saveEdit(u)}>Save</button>
+                      <button class="edit-cancel" onclick={cancelEdit}>Cancel</button>
+                    </div>
+                  </div>
                 {:else}
-                  <button class="source technical" title={u.source} onclick={() => onopensource(u.source)}>
-                    {u.hash.slice(0, 8)}
-                  </button>
+                  <span
+                    class="content {u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}"
+                  >
+                    {u.content}
+                  </span>
+                  <span class="item-actions">
+                    {#if u.deadline}
+                      <span class="technical type">due {new Date(u.deadline).toLocaleDateString()}</span>
+                    {:else}
+                      <button class="source technical" title={u.source} onclick={() => onopensource(u.source)}>
+                        {u.hash.slice(0, 8)}
+                      </button>
+                    {/if}
+                    <button class="mini-btn" title="Edit" aria-label="Edit" onclick={() => startEdit(u)}>✎</button>
+                    <button class="mini-btn danger" title="Delete" aria-label="Delete" onclick={() => ondelete(u)}>×</button>
+                  </span>
                 {/if}
               </li>
             {/each}
@@ -324,11 +362,67 @@
 
   .content { min-width:0; overflow-wrap:anywhere; }
 
+  .item-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-shrink: 0;
+  }
+
   .source {
     border:0; padding:0; color:var(--text-muted);
     transition:color var(--dur-fast) var(--ease-out);
   }
   .source:hover { background:none; color:var(--accent-memory); }
+
+  .mini-btn {
+    border: 0;
+    padding: 0.1rem 0.35rem;
+    background: none;
+    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.85em;
+    line-height: 1;
+  }
+  .mini-btn:hover { background: var(--surface-sunken); color: var(--text-primary); }
+  .mini-btn.danger:hover { color: var(--text-danger); background: var(--bg-danger); }
+
+  .edit-row {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .edit-input {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: var(--size-meta);
+    padding: 0.4rem 0.5rem;
+    border: 0.5px solid var(--accent-memory);
+    border-radius: var(--radius-sm);
+    background: var(--surface-page);
+    color: var(--text-primary);
+    resize: vertical;
+  }
+  .edit-actions { display: flex; gap: 0.4rem; }
+  .edit-save, .edit-cancel {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .edit-save {
+    border: none;
+    background: var(--accent-memory);
+    color: var(--surface-page);
+  }
+  .edit-cancel {
+    border: 0.5px solid var(--border-hairline);
+    background: none;
+    color: var(--text-secondary);
+  }
 
   .empty { margin:0; font-size:var(--size-meta); font-style:italic; color:var(--text-secondary); }
 
@@ -399,9 +493,6 @@
     outline-offset: 2px;
   }
 
-  /* Commitments render as a diamond instead of a circle — same fill/
-     border rules, just a rotated square with squared-off corners so it
-     doesn't read as a stray circle at a glance. */
   .node.commitment {
     border-radius: 0;
     clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
@@ -431,10 +522,6 @@
   }
   .node:hover::after { opacity: 1; }
 
-  /* Real edge-aware positioning, set via JS at hover time based on actual
-     measured position against the scroll container — a static CSS-only
-     rule can't account for current scroll offset, which is what actually
-     determines whether a tooltip clips. */
   .node.align-left::after {
     left: 0;
     transform: translateY(-6px);

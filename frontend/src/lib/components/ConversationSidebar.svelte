@@ -29,9 +29,7 @@
             title="Delete this conversation"
             onclick={(e) => {
               e.stopPropagation();
-              if (confirm(`Delete "${c.label}"? This can't be undone.`)) {
-                onDelete(c.conversation_id);
-              }
+              onDelete(c.conversation_id);
             }}
           >
             ×

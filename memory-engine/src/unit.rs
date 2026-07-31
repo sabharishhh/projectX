@@ -11,6 +11,7 @@ pub enum UnitType {
     Decision,
     Relationship,
     Commitment,
+    Correction,
 }
 
 /// Did the user say this outright, or did we infer it?

@@ -23,3 +23,16 @@ class MergeApplyRequest(BaseModel):
     adopt: list[str] = []
     replace: list[dict] = []
     summary: str = "manual merge"
+
+class DirectDeleteRequest(BaseModel):
+    hash: str
+    branch: str
+
+class DirectEditRequest(BaseModel):
+    hash: str
+    branch: str
+    new_content: str
+    unit_type: str
+    provenance: str
+    deadline: str | None = None
+    commitment_status: str | None = None

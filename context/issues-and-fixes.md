@@ -30,15 +30,6 @@ A plain-language log of the real problems hit during this build, what actually c
 **What happened:** After adding the relevance floor, a query like "what am I working on?" stopped finding a project fact that used completely different wording — zero shared words, so it scored near-zero and got filtered out before a separate "intent match" boost (which rewards facts of the right *type* for the question) ever got a chance to rescue it.
 **Fix:** Let intent-type matching count as its own path past the relevance floor, so a unit can qualify either through real word overlap *or* through matching the kind of thing being asked about.
 
-### BM25+dense hybrid retrieval was pulling in irrelevant memory facts — a query about "Robert Downey Jr + Christopher Nolan" surfaced an unrelated Cillian Murphy fact. Root cause: BM25's IDF math treats any word rare within the current candidate set as highly distinctive, even common words like "the" — with short, similarly-phrased memory facts, this caused spurious high scores on pure noise (confirmed live: a "the"-based collision put an unrelated fact top-1).
-**Fix**
-
-Added dense retrieval (bge-base-en via candle, Rust-native) alongside BM25 — catches semantic matches BM25 structurally can't (zero lexical overlap).
-Added a cross-encoder reranker (bge-reranker-v2-m3) on top — scores query+candidate jointly, catching entity-specific relevance dense's compressed vectors can blur.
-Diagnosed the BM25 failure concretely, confirmed dense alone already ranked correctly where BM25 introduced noise → dropped BM25 entirely. Matches prior LOCOMO/LongMemEval findings: BM25 wins on homogeneous corpora, actively hurts on heterogeneous ones like real memory stores.
-Cross-checked against a separate, previously-validated retrieval architecture doc — found the pipeline was collapsing two distinct parameters (dense candidate pool width vs. final output width) into one constant, and applying a pre-rerank relevance floor the validated design doesn't use. Fixed both: dense now surfaces top-50 by rank (no floor) before reranking, output count stays governed separately by the caller's requested limit.
-
-Current pipeline: dense retrieval (top-50, unfiltered) → cross-encoder rerank → caller-specified output count. No BM25, no OT. Validated on at least one clean, unambiguous test case; broader validation now shifts to real usage rather than further benchmarking.
 ---
 
 ## 3. Branch Routing (work / personal / main)
@@ -112,4 +103,3 @@ Current pipeline: dense retrieval (top-50, unfiltered) → cross-encoder rerank 
 ## Pattern worth naming
 
 A large share of these issues share one root cause: a failure happening silently, with no log line or visible error, which turned a five-minute fix into a multi-hour investigation. Every time this was found, the fix included adding real logging at the point of failure — not just solving the immediate bug, but making the *next* similar bug fast to diagnose instead of another blind hunt.
-

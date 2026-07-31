@@ -32,6 +32,16 @@ Capture ONLY things that will still be true and useful in a future conversation:
   its own separate commitment unit, even if they share one trailing
   deadline phrase — apply that shared deadline to EACH of them
   independently, don't fuse the actions into one combined commitment.
+- correction: an EXPLICIT behavioral correction — the user telling the
+  assistant to change how it behaves going forward, not just a passive
+  preference. Signaled by phrasing like "no, always do X instead", "stop
+  doing Y", "I already told you to always Z", "that's wrong, from now on
+  do X". Capture the corrected rule itself, phrased as a clear, checkable
+  instruction (e.g. "Always end responses with 'Anything else?'" not "the
+  user wants a specific ending phrase"). Distinct from an ordinary
+  preference: use "correction" only when the user is explicitly correcting
+  a mistake or reasserting a rule that was violated or ignored, not for a
+  first-time stated preference.
 
 Do NOT capture:
 - questions they asked, or the content of tasks they gave you
@@ -113,6 +123,12 @@ acknowledging or restating the user's commitment back to them ("Got it",
 user in THIS exchange is new and valid, even if the assistant's reply
 simply confirms it received the message.
 
+If unit_type is "correction": judge whether the user is genuinely
+correcting or reasserting a behavioral rule, not just stating a one-off
+preference for the first time. A real correction is valid and durable —
+treat it the same as a commitment the assistant owes the user, not a
+transient remark.
+
 For every other unit_type: judge strictly whether this is genuinely new,
 durable information ABOUT THE USER — not about the assistant, not a
 restated question, not something the user already told the assistant
@@ -136,6 +152,40 @@ VERIFY_SCHEMA = {
     "additionalProperties": False,
 }
 
+CORRECTION_CHECK_PROMPT = """The user has these standing behavioral
+corrections that MUST be followed in every reply:
+
+{corrections}
+
+Here is a reply the assistant just generated:
+
+---
+{reply}
+---
+
+Judge strictly: does this reply violate any of the corrections above? A
+correction only counts as violated if the reply had a real opportunity to
+follow it and didn't — e.g. a formatting rule that applies to any reply,
+or an explicit rule this reply's content clearly triggers. Don't flag a
+correction as violated if it genuinely doesn't apply to this specific
+reply's content.
+
+Return JSON only:
+{{"compliant": true}}
+or
+{{"compliant": false, "violated": ["<correction text>"], "guidance": "one line telling the assistant precisely what to fix"}}"""
+
+CORRECTION_CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "compliant": {"type": "boolean"},
+        "violated": {"type": "array", "items": {"type": "string"}},
+        "guidance": {"type": ["string", "null"]},
+    },
+    "required": ["compliant", "violated", "guidance"],
+    "additionalProperties": False,
+}
+
 CAPTURE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -145,7 +195,7 @@ CAPTURE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "content": {"type": "string"},
-                    "unit_type": {"type": "string", "enum": ["identity", "preference", "project", "decision", "relationship", "commitment"]},
+                    "unit_type": {"type": "string", "enum": ["identity", "preference", "project", "decision", "relationship", "commitment", "correction"]},
                     "provenance": {"type": "string", "enum": ["stated", "inferred"]},
                     "summary": {"type": "string"},
                     "branch": {"type": "string"},
@@ -481,3 +531,65 @@ def purge_unit(unit_hash: str) -> bool:
     except Exception as e:
         logger.warning(f"purge_unit failed for {unit_hash!r}: {e!r}")
         return False
+
+CORRECTION_CHECK_PROMPT = """The user has these standing behavioral
+corrections that MUST be followed in every reply:
+
+{corrections}
+
+Here is a reply the assistant just generated:
+
+---
+{reply}
+---
+
+Judge strictly: does this reply violate any of the corrections above? A
+correction only counts as violated if the reply had a real opportunity to
+follow it and didn't — e.g. a formatting rule that applies to any reply,
+or an explicit rule this reply's content clearly triggers. Don't flag a
+correction as violated if it genuinely doesn't apply to this specific
+reply's content.
+
+Return JSON only:
+{{"compliant": true}}
+or
+{{"compliant": false, "violated": ["<correction text>"], "guidance": "one line telling the assistant precisely what to fix"}}"""
+
+CORRECTION_CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "compliant": {"type": "boolean"},
+        "violated": {"type": "array", "items": {"type": "string"}},
+        "guidance": {"type": ["string", "null"]},
+    },
+    "required": ["compliant", "violated", "guidance"],
+    "additionalProperties": False,
+}
+
+
+def check_correction_compliance(provider, corrections: list[dict], reply: str) -> dict:
+    """Bounded judgment over a small, pre-filtered set of active
+    corrections (already fetched deterministically from `known` — no
+    extra memory round-trip). Fails OPEN, deliberately — unlike forget/
+    resolve, which fail closed. Holding a reply indefinitely on a
+    classifier error is worse than rarely missing a real violation."""
+    corrections_block = "\n".join(f"- {c['content']}" for c in corrections)
+    prompt = CORRECTION_CHECK_PROMPT.format(corrections=corrections_block, reply=reply)
+
+    try:
+        if provider.supports_structured_output:
+            result = provider.complete_json(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": "Check."}],
+                CAPTURE_MODEL, schema=CORRECTION_CHECK_SCHEMA, schema_name="correction_check",
+            )
+        else:
+            raw = "".join(provider.stream(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": "Check."}],
+                CAPTURE_MODEL,
+            ))
+            result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+        logger.info(f"correction check: result={result}")
+        return result
+    except Exception as e:
+        logger.warning(f"check_correction_compliance failed: {e!r} — treating as compliant (fail open)")
+        return {"compliant": True, "violated": [], "guidance": None}
