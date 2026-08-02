@@ -163,24 +163,26 @@ def _build_forget_context(forget_matches: list[dict], message: str) -> dict | No
 
 
 def _build_commitment_context(due_commitments: list[dict]) -> dict | None:
-    """Injects due-soon open commitments as a system-stated fact the model
-    can naturally weave in — never a mandate to mention every one, and
-    never something the model has to independently judge is true, since
-    the deterministic due-check already established that."""
-    if not due_commitments:
-        return None
-    lines = "; ".join(
-        f'"{c["content"]}"' + (f' (due {c["deadline"]})' if c.get("deadline") else "")
-        for c in due_commitments
-    )
+    if due_commitments:
+        lines = "; ".join(
+            f'"{c["content"]}"' + (f' (due {c["deadline"]})' if c.get("deadline") else "")
+            for c in due_commitments
+        )
+        return {
+            "role": "system",
+            "content": (
+                f"The user has open commitments coming due soon: {lines}. If one is "
+                "naturally relevant to this exchange, you may mention it — don't force "
+                "it into an unrelated conversation, and don't recite the whole list "
+                "mechanically."
+            ),
+        }
     return {
         "role": "system",
-        "content": (
-            f"The user has open commitments coming due soon: {lines}. If one is "
-            "naturally relevant to this exchange, you may mention it — don't force "
-            "it into an unrelated conversation, and don't recite the whole list "
-            "mechanically."
-        ),
+        "content": "There are currently NO open commitments tracked for this user — "
+                   "if asked about commitments, tasks, or reminders, say so plainly. "
+                   "This is the current, authoritative state, overriding anything "
+                   "said earlier in this conversation.",
     }
 
 def _build_correction_context(active_corrections: list[dict]) -> dict | None:
@@ -569,8 +571,6 @@ def stream_chat(conversation_id: str, message: str):
     )
     if errored:
         return
-
-    print(f"DEBUG full_response length: {len(full_response)!r}, first 80 chars: {full_response[:80]!r}")
 
     conflicts = yield from _process_capture(
         conversation_id, message, full_response, known, allowed_branches, forget_matches, activity_log,

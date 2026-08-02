@@ -36,3 +36,8 @@ class DirectEditRequest(BaseModel):
     provenance: str
     deadline: str | None = None
     commitment_status: str | None = None
+
+class ManualCommitRequest(BaseModel):
+    content: str
+    branch: str = "main"
+    deadline: str | None = None

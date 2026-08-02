@@ -28,6 +28,15 @@ JUDGMENT_GUIDANCE = (
     "assistance, or explicit feedback on a draft."
 )
 
+CONSISTENCY_GUIDANCE = (
+    "The facts and commitments listed above reflect the CURRENT state of "
+    "memory, freshly fetched this turn. If anything you said earlier in "
+    "this conversation conflicts with what's listed now — because the "
+    "user edited, deleted, or resolved something since then — treat the "
+    "current list as correct and your earlier statement as outdated. "
+    "Don't insist on your own prior turn over what's actually true now."
+)
+
 FORGET_CAPABILITY = (
     "You do have the ability to forget or delete stored memory, mediated "
     "through a confirmation prompt the user sees in the interface — never "
@@ -92,7 +101,7 @@ def fetch_branches() -> list[str]:
         return []
 
 def build_system_message(units: list[dict], skill_prompt: str | None = None) -> dict:
-    parts = [IDENTITY, JUDGMENT_GUIDANCE, FORGET_CAPABILITY]
+    parts = [IDENTITY, JUDGMENT_GUIDANCE, FORGET_CAPABILITY, CONSISTENCY_GUIDANCE]
 
     if skill_prompt:
         parts.append(skill_prompt)
@@ -110,3 +119,4 @@ def build_system_message(units: list[dict], skill_prompt: str | None = None) -> 
         )
 
     return {"role": "system", "content": "\n\n".join(parts)}
+

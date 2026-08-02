@@ -19,7 +19,7 @@ MAIN_REASONING_EFFORT = os.getenv("REASONING_EFFORT", "low")
 # unless explicitly overridden — never silently fall back to a cloud model
 # name that doesn't exist on the active provider.
 CAPTURE_MODEL = os.getenv("CAPTURE_MODEL") or (
-    model if os.getenv("PROVIDER") == "local" else "gpt-5.4-mini"
+    model if os.getenv("PROVIDER") == "local" else "gpt-5.6-luna"
 )
 
 # conflicts/forgets awaiting the user's decision (in-process; lost on restart)

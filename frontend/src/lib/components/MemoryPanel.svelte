@@ -2,7 +2,7 @@
   import Collapsible from './Collapsible.svelte';
   import { reveal } from '$lib/motion.js';
 
-  let { memory = [], history = [], onopensource = () => {}, ondelete = () => {}, onedit = () => {}, onToggle } = $props();
+  let { memory = [], history = [], onopensource = () => {}, ondelete = () => {}, onedit = () => {}, oncreate = () => {}, onToggle } = $props();
 
   let view = $state('current'); // 'current' | 'timeline'
   let selectedEntry = $state(null);
@@ -10,6 +10,9 @@
   let tooltipAlign = $state('center'); // 'center' | 'left' | 'right'
   let editingHash = $state(null);
   let editDraft = $state('');
+  let showAddCommitment = $state(false);
+  let newCommitmentText = $state('');
+  let newCommitmentDeadline = $state('');
 
   const ORDER = ['identity', 'preference', 'project', 'decision', 'relationship', 'commitment', 'correction'];
   const grouped = $derived(
@@ -19,7 +22,7 @@
         u.unit_type === type &&
         !(type === 'commitment' && u.commitment_status && u.commitment_status !== 'open')
       ),
-    })).filter((g) => g.items.length)
+    })).filter((g) => g.items.length || g.type === 'commitment')
   );
 
   function verb(change) {
@@ -68,6 +71,15 @@
     }
     editingHash = null;
     editDraft = '';
+  }
+
+  function submitNewCommitment() {
+    const trimmed = newCommitmentText.trim();
+    if (!trimmed) return;
+    oncreate(trimmed, newCommitmentDeadline || null);
+    newCommitmentText = '';
+    newCommitmentDeadline = '';
+    showAddCommitment = false;
   }
 
   // --- graph layout ---
@@ -199,6 +211,21 @@
               </li>
             {/each}
           </ul>
+
+          {#if group.type === 'commitment'}
+            <div class="add-commitment">
+              {#if showAddCommitment}
+                <input type="text" class="add-input" placeholder="What do you need to do?" bind:value={newCommitmentText} />
+                <input type="date" class="add-date" bind:value={newCommitmentDeadline} title="Leave blank for no due date — stays as a passive reminder" />
+                <div class="edit-actions">
+                  <button class="edit-save" onclick={submitNewCommitment}>Add</button>
+                  <button class="edit-cancel" onclick={() => (showAddCommitment = false)}>Cancel</button>
+                </div>
+              {:else}
+                <button class="mini-btn" onclick={() => (showAddCommitment = true)}>+ Add commitment</button>
+              {/if}
+            </div>
+          {/if}
         </Collapsible>
       </div>
     {/each}
@@ -563,5 +590,26 @@
     font-family: var(--font-technical);
     font-size: 0.8em;
     color: var(--text-secondary);
+  }
+  .add-commitment {
+    margin-top: var(--space-2);
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .add-input, .add-date {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: var(--size-meta);
+    padding: 0.4rem 0.5rem;
+    border: 0.5px solid var(--border-hairline);
+    border-radius: var(--radius-sm);
+    background: var(--surface-page);
+    color: var(--text-primary);
+  }
+  .add-input:focus, .add-date:focus {
+    border-color: var(--accent-memory);
+    outline: none;
   }
 </style>

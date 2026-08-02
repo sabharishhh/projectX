@@ -3,7 +3,7 @@ from fastapi import APIRouter
 import db
 import ledger
 from capture import supersede_unit, commit_unit, forget_unit, purge_unit
-from models import ResolveRequest, ForgetResolveRequest, DirectDeleteRequest, DirectEditRequest
+from models import ResolveRequest, ForgetResolveRequest, DirectDeleteRequest, DirectEditRequest, ManualCommitRequest
 from state import PENDING, PENDING_FORGETS
 
 router = APIRouter()
@@ -80,4 +80,25 @@ def edit_unit(req: DirectEditRequest):
     ok = supersede_unit(req.hash, unit, "memory-panel", req.branch)
     if ok:
         ledger.log("memory_edited", f"user edited {req.hash[:8]} -> {req.new_content}", "memory-panel", actor="user")
+    return {"ok": ok}
+
+@router.post("/api/memory/commit")
+def create_commitment(req: ManualCommitRequest):
+    """Manual creation — skips extraction and verification entirely. The
+    user directly stating "track this" is the authority, same reasoning
+    as manual edit needing no re-verification. deadline is optional —
+    None means "no due date, stays open as a passive reminder," never
+    surfaced via find_due_commitments (which only matches units that
+    actually have a deadline), only visible in the Memory panel."""
+    unit = {
+        "content": req.content,
+        "unit_type": "commitment",
+        "provenance": "stated",
+        "summary": req.content,
+        "deadline": req.deadline,
+        "commitment_status": "open",
+    }
+    ok = commit_unit(unit, "memory-panel", req.branch)
+    if ok:
+        ledger.log("memory_commit", f"manually created: {req.content}", "memory-panel", actor="user")
     return {"ok": ok}

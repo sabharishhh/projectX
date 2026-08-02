@@ -259,6 +259,7 @@
     }
   }
 
+
   async function sendMessage(overrideText) {
     // Prioritize override (Enter key), then our sync tracker, then fallback to input
     const text = overrideText ?? latestText ?? input;
@@ -346,6 +347,17 @@
       await startNewChat();
     }
     await loadConversations();
+  }
+
+  async function createCommitment(content, deadline, branch = "main") {
+    const isoDeadline = deadline ? `${deadline}T00:00:00Z` : null;
+    const res = await fetch(`${API_BASE}/api/memory/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, branch, deadline: isoDeadline }),
+    });
+    const data = await res.json();
+    if (data.ok) { await loadMemory(); await loadHistory(); }
   }
 
   async function resolveForget(act, choice) {
@@ -557,7 +569,7 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="resize-handle" onpointerdown={startResize}></div>
       <div class="panel-inner" style="width: {panelWidth}px">
-        <MemoryPanel {memory} {history} onopensource={(sourceId) => console.log("Source clicked:", sourceId)} ondelete={deleteMemoryItem} onedit={editMemoryItem} onToggle={() => (panelOpen = false)} />
+        <MemoryPanel {memory} {history} onopensource={(sourceId) => console.log("Source clicked:", sourceId)} ondelete={deleteMemoryItem} onedit={editMemoryItem} oncreate={createCommitment} onToggle={() => (panelOpen = false)} />
       </div>
     </div>
   {/if}

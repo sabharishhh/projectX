@@ -6,7 +6,7 @@ from .anthropic_provider import AnthropicProvider
 from .local_provider import LocalProvider
 
 REGISTRY = {
-    "openai": (OpenAIProvider, "OPENAI_API_KEY", "gpt-5.4-mini"),
+    "openai": (OpenAIProvider, "OPENAI_API_KEY", "gpt-5.6-luna"),
     "anthropic": (AnthropicProvider, "ANTHROPIC_API_KEY", "claude-sonnet-4-6"),
 }
 

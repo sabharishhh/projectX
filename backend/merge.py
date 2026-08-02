@@ -49,7 +49,7 @@ def find_conflicts(provider, from_branch: str, into_branch: str,
     try:
         raw = "".join(provider.stream(
             [{"role": "system", "content": prompt}, {"role": "user", "content": "Compare."}],
-            os.getenv("CAPTURE_MODEL", "gpt-5.4-mini"),
+            os.getenv("CAPTURE_MODEL", "gpt-5.6-luna"),
         ))
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         pairs = parsed.get("conflicts", [])

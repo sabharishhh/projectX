@@ -10,7 +10,7 @@ from memory import invalidate_state_cache
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("capture")
 
-CAPTURE_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.4-mini")
+CAPTURE_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.6-luna")
 
 CAPTURE_PROMPT = """You extract durable facts about the user from a conversation turn.
 
@@ -252,6 +252,14 @@ not guess, and do not resolve something just because it's topically
 related. If nothing in this exchange resolves any of the listed
 commitments, return an empty list.
 
+Only resolve a commitment if the exchange contains a genuine STATEMENT
+that something was done or is no longer needed — never resolve just
+because the user asked a question about their commitments, asked what's
+open, or asked for a status update. Asking "what are my commitments" or
+"is X still open" is a question, not a completion — do NOT resolve
+anything based on a question alone, even if your own reply happens to
+list or restate the commitment.
+
 Return JSON only:
 {{"resolutions": [{{"hash": "a1b2c3d4", "status": "done", "reason": "one line naming the specific match"}}]}}
 or
@@ -347,6 +355,9 @@ def extract_units(provider, user_message: str, assistant_message: str,
                 u.pop("deadline", None)
             if u.get("unit_type") == "commitment":
                 u["commitment_status"] = "open"
+
+        logger.info(f"extract_units raw: {len(units)} candidate(s) — "
+                    f"{[(u.get('unit_type'), u.get('content')) for u in units]}")
     except Exception as e:
         logger.warning(f"extract_units failed to parse: {e!r}")
         return []
