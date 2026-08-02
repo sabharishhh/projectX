@@ -14,7 +14,7 @@ import skills as skill_registry
 
 import search_decision as search_decision_module
 from capture import (
-    extract_units, commit_unit, find_open_commitments,
+    extract_units, commit_unit, is_semantic_duplicate, find_open_commitments,
     find_due_commitments, detect_commitment_resolutions, resolve_commitment,
     check_correction_compliance,
 )
@@ -372,9 +372,17 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
             continue  # verbatim duplicate of something already known — not a
                     # conflict (nothing changed) and not a new fact (already
                     # have it) — no-op either way
+
         short = u.get("supersedes")
-        target = next((k for k in known if k["hash"].startswith(short)), None) if short else None
         branch = u.get("branch", "main")
+
+        if not short and is_semantic_duplicate(u, branch):
+            activity_log.append({"kind": "duplicate_skipped", "content": u["content"]})
+            continue  # fuzzy backstop — catches rephrasings CAPTURE_PROMPT's own
+                    # judgment missed; explicit supersedes always bypasses this,
+                    # since that's a deliberate replacement, not a duplicate
+
+        target = next((k for k in known if k["hash"].startswith(short)), None) if short else None
 
         if target:
             cid = uuid4().hex[:12]

@@ -10,6 +10,8 @@ from memory import invalidate_state_cache
 logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("capture")
 
+DUPLICATE_SIMILARITY_THRESHOLD = 0.92
+
 CAPTURE_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.6-luna")
 
 CAPTURE_PROMPT = """You extract durable facts about the user from a conversation turn.
@@ -286,6 +288,39 @@ RESOLVE_SCHEMA = {
     "additionalProperties": False,
 }
 
+def is_semantic_duplicate(u: dict, branch: str) -> bool:
+    """Fuzzy backstop for capture's own judgment — catches rephrasings
+    that slip past CAPTURE_PROMPT's semantic-dedup instruction (exact
+    string match alone doesn't catch "prefers dark mode" vs. "likes the
+    interface in dark mode"). Reuses the same dense retrieval pipeline
+    already built for /retrieve — no new infrastructure, no LLM call.
+    Fails open (not-a-duplicate) on any error: a missed duplicate is
+    recoverable later, silently blocking a real new fact is not."""
+    try:
+        r = client.post(
+            "/retrieve",
+            json={
+                "query": u["content"],
+                "max_units": 1,
+                "branch": branch,
+                "boost_types": [u["unit_type"]],
+            },
+        )
+        r.raise_for_status()
+        results = r.json()
+        if not results:
+            return False
+        top = results[0]
+        return (
+            top.get("unit_type") == u["unit_type"]
+            and top.get("score", 0.0) >= DUPLICATE_SIMILARITY_THRESHOLD
+        )
+    except Exception as e:
+        logger.warning(
+            f"is_semantic_duplicate check failed for {u.get('content', '')!r}: "
+            f"{e!r} — treating as not-duplicate (fail open)"
+        )
+        return False
 
 def _known_facts_block(units: list[dict]) -> str:
     if not units:

@@ -1,0 +1,7 @@
+.bx--btn--primary { background-color: #8ECBFD; color: #161616; }
+.bx--btn--primary:hover { background-color: #6db4ea; }
+
+.bx--tabs__nav-item--selected:not(.bx--tabs__nav-item--disabled) {
+  border-block-end-color: #8ECBFD;
+  box-shadow: inset 0 2px #8ECBFD;
+}
