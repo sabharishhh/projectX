@@ -1,4 +1,4 @@
-# projectX — Issues Faced and How We Solved Them
+# loki — Issues Faced and How We Solved Them
 
 A plain-language log of the real problems hit during this build, what actually caused each one, and what fixed it. Written so a future reader (including future us) can understand what happened without re-living the debugging.
 

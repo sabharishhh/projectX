@@ -1,4 +1,4 @@
-# projectX — Self-Learning Roadmap
+# loki — Self-Learning Roadmap
 
 **Prerequisite:** finish the second memory subsystem (Phase 3 — research/planning/build
 context store) before starting this list. Item 1 builds on the existing preference/fact

@@ -1,4 +1,4 @@
-"""Local MCP server exposing projectX's agent-facing tools — web_search,
+"""Local MCP server exposing loki's agent-facing tools — web_search,
 web_fetch, and memory_search. One process, one tool surface, launched as a
 subprocess over stdio by mcp_client.py. Each tool stays narrow and
 single-purpose on its own terms (read-only where relevant, hard-scoped) —
@@ -12,7 +12,7 @@ from memory_client import client
 from mcp.server.fastmcp import FastMCP
 
 
-mcp = FastMCP("projectx-tools")
+mcp = FastMCP("loki-tools")
 MAX_FETCH_CHARS = 8000
 
 NOT_EXTRACTED_PREFIX = "Could not extract content from"

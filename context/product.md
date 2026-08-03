@@ -1,9 +1,9 @@
-# projectX — Product Document
+# loki — Product Document
 
 *A personal AI assistant whose memory is versioned, auditable, correctable, and
 fully owned by the user. Self-hosted, BYOK, free, not feature-gated.*
 
-Working name: **projectX**. Final product name deferred.
+Working name: **loki**. Final product name deferred.
 This document describes the product **as actually built** as of commit `d2e4b7e`
 (branch `commitments`, v0.21.0+). Where the code and the specs disagree, the code
 wins and the divergence is noted.
@@ -20,7 +20,7 @@ take a fact back, and keeps a full history you can inspect or walk away with.
 
 ### 1.2 The problems it exists to solve
 
-| Problem | How projectX answers it |
+| Problem | How loki answers it |
 |---|---|
 | **Memory poisoning / staleness.** ChatGPT/Claude/Gemini silently store outdated or wrong facts and quietly distort later answers, with no audit trail. | Every fact is a versioned unit. Contradictions are surfaced as a conversational choice, never auto-resolved. Nothing is overwritten — old versions are superseded and stay readable. |
 | **Trust / privacy.** Users can't see what's stored, can't verify it, and often don't want a vendor holding a profile of their life. | The store is plain, local, content-addressable files. A live Memory panel shows everything known plus the full commit timeline. |
@@ -38,7 +38,7 @@ agent/developer-infra builders, **not** mainstream consumers at v1.
 
 Not competing with developer memory APIs (mem0, Supermemory), agent/coding-task
 memory infra (GCC/Contexa, Puppyone, Omnigraph), or native vendor memory
-(opaque, vendor-held, feature-gated). projectX is the first **personal,
+(opaque, vendor-held, feature-gated). loki is the first **personal,
 individual-facing** assistant with memory that is versioned, auditable, and
 user-owned — delivered through **natural conversation**, not git commands.
 
@@ -106,7 +106,7 @@ Four processes, all local:
 |---|---|---|
 | Chat backend | Python / FastAPI | Fastest iteration; best multi-provider LLM SDK coverage |
 | Frontend | Svelte 5 (runes) | Lighter/faster than React, good contributor DX |
-| Chat persistence | SQLite (`backend/projectx.db`) | Zero setup, file-based, portable, single-user |
+| Chat persistence | SQLite (`backend/loki.db`) | Zero setup, file-based, portable, single-user |
 | Streaming | SSE | Simplest one-directional token streaming |
 | Memory engine | Rust | Genuine CPU-bound work — hashing, diffing, embedding, reranking |
 | Embeddings/rerank | `candle` (in-process, CPU) | No Python ML runtime, no external inference service |

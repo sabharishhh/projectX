@@ -113,10 +113,10 @@
   }
 
   function loadInitialConversationId() {
-    const existing = localStorage.getItem("projectx-conversation-id");
+    const existing = localStorage.getItem("loki-conversation-id");
     if (existing) return existing;
     const fresh = newConversationId();
-    localStorage.setItem("projectx-conversation-id", fresh);
+    localStorage.setItem("loki-conversation-id", fresh);
     return fresh;
   }
 
@@ -228,14 +228,14 @@
 
   async function startNewChat() {
     CONVERSATION_ID = newConversationId();
-    localStorage.setItem("projectx-conversation-id", CONVERSATION_ID);
+    localStorage.setItem("loki-conversation-id", CONVERSATION_ID);
     messages = [];
   }
 
   async function switchConversation(id) {
     if (id === CONVERSATION_ID) return;
     CONVERSATION_ID = id;
-    localStorage.setItem("projectx-conversation-id", CONVERSATION_ID);
+    localStorage.setItem("loki-conversation-id", CONVERSATION_ID);
     await loadMessages();
   }
 
@@ -413,7 +413,7 @@
   }
   function stopResize() {
     resizingPanel = false;
-    localStorage.setItem("projectx-panel-width", String(panelWidth));
+    localStorage.setItem("loki-panel-width", String(panelWidth));
     window.removeEventListener("pointermove", onResize);
     window.removeEventListener("pointerup", stopResize);
   }
@@ -549,7 +549,7 @@
         <CodeMirror
           bind:value={input}
           extensions={editorExtensions}
-          placeholder="Ask ProjectX"
+          placeholder="Ask loki"
         />
       </div>
       <Button size="field" kind="primary" disabled={streaming} onclick={() => sendMessage()}>

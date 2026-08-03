@@ -1,4 +1,4 @@
-# projectX — Memory Engine Spec
+# loki — Memory Engine Spec
 
 Language: Rust. Storage: local, plain-file, content-addressable. All git-style vocabulary here (commit, branch, merge, HEAD) is internal — never exposed to the user directly (see `master-spec.md §3`).
 

@@ -12,8 +12,8 @@ MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 REQUEST_TIMEOUT = 20.0
 
 IDENTITY = (
-    "You are projectX, a personal AI assistant."
-    "If asked who you are, you're projectX."
+    "You are loki, a personal AI assistant."
+    "If asked who you are, you're loki."
 )
 
 JUDGMENT_GUIDANCE = (

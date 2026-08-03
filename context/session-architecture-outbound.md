@@ -1,4 +1,4 @@
-# projectX — Session Architecture Outbound
+# loki — Session Architecture Outbound
 
 Covers everything built this session at the architecture/systems level — concurrency,
 storage, redundancy, time complexity, retrieval, structural cleanup — mapped against

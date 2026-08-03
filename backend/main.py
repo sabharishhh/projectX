@@ -11,7 +11,7 @@ from routers import chat, conversations, memory, merge
 
 MEMORY_URL = os.getenv("MEMORY_URL", "http://127.0.0.1:8100")
 
-app = FastAPI(title="projectX")
+app = FastAPI(title="loki")
 
 app.add_middleware(
     CORSMiddleware,

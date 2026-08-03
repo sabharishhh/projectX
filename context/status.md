@@ -1,4 +1,4 @@
-# projectX — Project Status
+# loki — Project Status
 
 *A personal, private AI assistant with versioned, auditable, git-like memory. Self-hosted, BYOK, free, not gatekept.*
 

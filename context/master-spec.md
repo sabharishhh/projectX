@@ -1,6 +1,6 @@
-# projectX — Master Spec
+# loki — Master Spec
 
-*Working name: projectX. Final product name deferred.*
+*Working name: loki. Final product name deferred.*
 
 ---
 
@@ -17,7 +17,7 @@
 Privacy-conscious, tech-adjacent early adopters capable of self-hosting or comfortable with a slightly more technical setup (the r/selfhosted, r/LocalLLaMA, r/privacy audience) — not enterprises, not agent/developer-infra builders, not mainstream consumers at v1. Mainstream reach is a possible later expansion, not the initial bet.
 
 ### 1.3 Positioning
-Not competing with mem0/Supermemory (developer memory APIs) or GCC/Contexa/Puppyone/Omnigraph (agent/coding-task memory infra) or native ChatGPT/Claude/Gemini memory (opaque, vendor-held, feature-gated). projectX is the first **personal, individual-facing** AI assistant with memory that is versioned, auditable, and fully user-owned — delivered through natural conversation, not through git-style commands.
+Not competing with mem0/Supermemory (developer memory APIs) or GCC/Contexa/Puppyone/Omnigraph (agent/coding-task memory infra) or native ChatGPT/Claude/Gemini memory (opaque, vendor-held, feature-gated). loki is the first **personal, individual-facing** AI assistant with memory that is versioned, auditable, and fully user-owned — delivered through natural conversation, not through git-style commands.
 
 ### 1.4 Core Differentiators
 1. **Auditable, correctable memory presented as a UX benefit, not an architecture the user has to operate.** No commits/branches/merges exposed as vocabulary — just "remember this," "forget that," and "why do you think that about me."

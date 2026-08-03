@@ -1,4 +1,4 @@
-# projectX — Chat System Spec
+# loki — Chat System Spec
 
 Covers the conversational agent's capabilities layer: skills, web search, model provider abstraction, memory search tool, and session/streaming behavior. Distinct from `tech-stack.md` (names the tools) and `memory-engine-spec.md` (memory system internals).
 

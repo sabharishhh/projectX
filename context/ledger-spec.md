@@ -1,4 +1,4 @@
-# projectX — Ledger Spec
+# loki — Ledger Spec
 
 The ledger is a **product-wide audit trail**, not a memory-engine-only feature. It's distinct from the memory engine's own commit history (`memory-engine-spec.md §2`), which tracks memory *state* changes specifically — the ledger tracks *everything worth auditing* across the product.
 

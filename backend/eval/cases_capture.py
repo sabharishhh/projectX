@@ -16,7 +16,7 @@ BRANCH = "eval-capture"
 @case("assistant_identity_rejected", "capture", "who are you / who created you must not be captured")
 def _assistant_identity():
     for msg in ["who created you?", "what's your name?", "who are you"]:
-        units = extract_units(provider, msg, "I'm projectX, created by Sabharish.", known=[], branches=[BRANCH])
+        units = extract_units(provider, msg, "I'm loki, created by Sabharish.", known=[], branches=[BRANCH])
         if any(u.get("unit_type") != "commitment" for u in units):
             return False, f"wrongly captured for {msg!r}: {units}"
     return True
@@ -60,10 +60,10 @@ _IDENTITY_PHRASINGS = [
     ("who created you?", "I was created by Sabharish."),
     ("who made you", "Sabharish built me."),
     ("who built you?", "I was built by Sabharish."),
-    ("what's your name?", "I'm projectX."),
-    ("what are you called", "My name is projectX."),
-    ("who are you", "I'm projectX, your personal AI assistant."),
-    ("are you an AI made by Sabharish?", "Yes, I'm projectX, and Sabharish created me."),
+    ("what's your name?", "I'm loki."),
+    ("what are you called", "My name is loki."),
+    ("who are you", "I'm loki, your personal AI assistant."),
+    ("are you an AI made by Sabharish?", "Yes, I'm loki, and Sabharish created me."),
 ]
 
 

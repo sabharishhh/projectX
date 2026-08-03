@@ -124,16 +124,35 @@ def _fetch_relevant(message: str, skill: dict | None, allowed_branches: list[str
 
 def _fetch_due_commitments(allowed_branches: list[str]) -> list[dict]:
     """Deterministic, no LLM — every currently-open commitment across
-    allowed branches whose deadline falls within the surfacing window
-    (find_due_commitments' default). Same per-branch concurrency pattern
-    as _fetch_known/_fetch_relevant. This is the "what's coming up"
-    surfacing side of the feature — distinct from find_open_commitments,
-    which ignores deadline entirely and is only used for resolution-
-    matching in _process_commitment_resolutions below."""
+        allowed branches whose deadline falls within the surfacing window
+        (find_due_commitments' default). Same per-branch concurrency pattern
+        as _fetch_known/_fetch_relevant. This is the "what's coming up"
+        surfacing side of the feature — distinct from find_open_commitments,
+        which ignores deadline entirely and is only used for resolution-
+        matching in _process_commitment_resolutions below."""
     with ThreadPoolExecutor(max_workers=max(len(allowed_branches), 1)) as pool:
         futures = {b: pool.submit(find_due_commitments, b) for b in allowed_branches}
         return [{**u, "branch": b} for b in allowed_branches for u in futures[b].result()]
 
+def _gather_branches_known_commitments() -> tuple[list[str], list[dict], list[dict]]:
+    """Bundles the branch-list fetch (fast, deterministic) with the two
+    downstream fetches that depend on it (known facts, due commitments).
+    Submitted as a single future from stream_chat's top-level gather wave
+    so this whole chain runs concurrently with the independent
+    classifiers (skill, search-decision, time-travel) instead of after
+    them — this group and the classifiers share no dependency on each
+    other, only on `message` (classifiers) or branch state (this
+    function)."""
+    existing_branches = fetch_branches()
+    allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        known_future = pool.submit(_fetch_known, allowed_branches)
+        due_future = pool.submit(_fetch_due_commitments, allowed_branches)
+        known = known_future.result()
+        due_commitments = due_future.result()
+
+    return allowed_branches, known, due_commitments
 
 # --- Phase: conversation assembly ---
 
@@ -500,26 +519,52 @@ def stream_chat(conversation_id: str, message: str):
     history = load_messages(conversation_id)
     save_message(conversation_id, "user", message)
 
-    skill, search_decision = _classify(message)
+    # Wave 1: skill/search-decision, time-travel detection, and the
+    # branch+known+commitments chain all depend only on `message` (the
+    # first two) or on branch state (the third) — none depend on each
+    # other's output, so they run concurrently. Previously this was a
+    # strictly linear chain (classify -> time-travel -> known -> forget
+    # -> retrieval), costing 3 sequential LLM round-trips before the
+    # main reply could even begin streaming. This is the direct fix for
+    # that time-to-first-token cost.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        classify_future = pool.submit(_classify, message)
+        time_travel_future = pool.submit(time_travel.detect_time_travel_query, provider, message)
+        branches_future = pool.submit(_gather_branches_known_commitments)
 
-    existing_branches = fetch_branches()
-    allowed_branches = sorted({"main", *branching.CANONICAL_DOMAINS, *existing_branches})
+        skill, search_decision = classify_future.result()
+        time_travel_target = time_travel_future.result()
+        allowed_branches, known, due_commitments = branches_future.result()
 
-    time_travel_target = time_travel.detect_time_travel_query(provider, message)
-
-    known = _fetch_known(allowed_branches)
     active_corrections = [u for u in known if u.get("unit_type") == "correction"]
-    forget_matches = forgetting.detect_forget_request(provider, message, known, allowed_branches)
-    due_commitments = _fetch_due_commitments(allowed_branches)
+
+    # Wave 2: forget-detection genuinely needs `known` (just produced
+    # above), and retrieval (relevant-fact or time-travel) genuinely
+    # needs `skill`/`allowed_branches` (also ready) — but neither
+    # depends on the other, so they run concurrently instead of
+    # forget-detection blocking retrieval the way it did before.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        forget_future = pool.submit(forgetting.detect_forget_request, provider, message, known, allowed_branches)
+
+        if time_travel_target:
+            retrieval_future = pool.submit(
+                lambda: [fetch_state_at_time(b, time_travel_target) for b in allowed_branches]
+            )
+        else:
+            retrieval_future = pool.submit(_fetch_relevant, message, skill, allowed_branches)
+
+        forget_matches = forget_future.result()
+        retrieval_result = retrieval_future.result()
 
     if time_travel_target:
-        tt_results = [fetch_state_at_time(b, time_travel_target) for b in allowed_branches]
+        tt_results = retrieval_result
         tt_units = [u for r in tt_results for u in r["units"]]
         resolved_dates = [r["resolved_at"] for r in tt_results if r["resolved_at"]]
         injected = tt_units[:12]
         per_branch_debug = {}  # historical path doesn't populate the normal retrieval trace
     else:
-        injected, per_branch_debug = _fetch_relevant(message, skill, allowed_branches)
+        injected, per_branch_debug = retrieval_result
+    
 
     save_retrieval_trace(conversation_id, message, {
         "allowed_branches": allowed_branches,

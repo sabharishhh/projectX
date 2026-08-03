@@ -81,7 +81,7 @@ Do NOT capture:
 - transient state ("I'm tired today")
 - anything about the assistant itself — its name, capabilities, or how it
   described itself in this exchange. An exchange like "who are you?" / "I'm
-  projectX" reveals nothing about the user and must not be captured, even
+  loki" reveals nothing about the user and must not be captured, even
   phrased as if it were a fact ("the user was told the assistant is named
   X", "the user asked the assistant's identity") — that's still not
   information about the user.
@@ -344,6 +344,7 @@ def is_semantic_duplicate(u: dict, branch: str) -> bool:
                 "max_units": 1,
                 "branch": branch,
                 "boost_types": [u["unit_type"]],
+                "ignore_pinning": True,
             },
         )
         r.raise_for_status()

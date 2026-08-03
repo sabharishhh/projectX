@@ -175,6 +175,8 @@ struct RetrieveRequest {
     branch: String,
     #[serde(default)]
     boost_types: Vec<UnitType>,
+    #[serde(default)]
+    ignore_pinning: bool,
 }
 
 #[derive(Deserialize)]
@@ -410,9 +412,13 @@ async fn retrieve(
     check_branch(&req.branch)?;
     let units = app.store.current_state(&req.branch).map_err(internal)?;
 
-    let (pinned, rest): (Vec<_>, Vec<_>) = units.into_iter().partition(|(_, u)| {
-        matches!(u.unit_type, UnitType::Identity | UnitType::Preference)
-    });
+    let (pinned, rest): (Vec<_>, Vec<_>) = if req.ignore_pinning {
+        (Vec::new(), units)
+    } else {
+        units.into_iter().partition(|(_, u)| {
+            matches!(u.unit_type, UnitType::Identity | UnitType::Preference)
+        })
+    };
 
     let mut out: Vec<RetrievedUnitView> = pinned
         .into_iter()

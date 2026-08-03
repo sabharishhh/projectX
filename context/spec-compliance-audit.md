@@ -1,6 +1,6 @@
-# projectX — Spec Compliance Audit
+# loki — Spec Compliance Audit
 
-Cross-checks the actual implementation against `master-spec.md`, `memory-engine-spec.md`, `chat-system-spec.md`, and `ledger-spec.md`, line by line. Companion to `projectX-status.md` (which covers build progress in general); this document is specifically about where the implementation matches, deviates from, or falls short of what the specs call for.
+Cross-checks the actual implementation against `master-spec.md`, `memory-engine-spec.md`, `chat-system-spec.md`, and `ledger-spec.md`, line by line. Companion to `loki-status.md` (which covers build progress in general); this document is specifically about where the implementation matches, deviates from, or falls short of what the specs call for.
 
 **Headline finding:** the core architecture — memory units, commits, HEAD resolution, branch isolation, content-addressable storage, skills, search — is solid and largely spec-compliant. But several things the specs describe as *core, load-bearing behavior* were never actually wired up, most notably: memory never merges automatically, and the natural-language "remember X" / "forget X" commands don't exist despite being named as *the* way memory control should work.
 
@@ -8,7 +8,7 @@ Cross-checks the actual implementation against `master-spec.md`, `memory-engine-
 
 ## 1. Gaps — Not Previously Documented
 
-These were not mentioned in `projectX-status.md` or flagged as deliberate deferrals at any point in the build. Found only by re-reading the specs against the actual code.
+These were not mentioned in `loki-status.md` or flagged as deliberate deferrals at any point in the build. Found only by re-reading the specs against the actual code.
 
 ### 1.1 High priority — core differentiators affected
 
@@ -44,7 +44,7 @@ These were not mentioned in `projectX-status.md` or flagged as deliberate deferr
 
 | Issue | Where | Resolution |
 |---|---|---|
-| **Chat route blocked the entire event loop under load** | `backend/main.py`, `/api/chat` | Not called for by any spec, but worth recording: the route was declared `async def` while every call inside it (`httpx` sync client for memory fetches, capture, provider streaming) was synchronous and never `await`ed. FastAPI runs `async def` routes directly on the single shared event loop, so a blocking synchronous call inside one didn't yield — it stalled the *entire server*, including unrelated requests like `/health`, for the full duration of that chat turn. Found via the integration test suite (`test_projectx.py`): isolated test functions passed, but the full suite reliably hung on `ReadTimeout` once enough sequential turns had run. Confirmed by a direct check (`curl /health` during an in-flight chat turn took multiple seconds instead of ~5ms). **Fix: `async def chat(...)` → `def chat(...)`.** A plain (non-async) FastAPI route runs in a background thread pool instead of the event loop, so concurrent requests no longer block each other. Verified: full suite runtime dropped from ~450s to ~90s after the fix, with 0 timeouts across three consecutive full runs. |
+| **Chat route blocked the entire event loop under load** | `backend/main.py`, `/api/chat` | Not called for by any spec, but worth recording: the route was declared `async def` while every call inside it (`httpx` sync client for memory fetches, capture, provider streaming) was synchronous and never `await`ed. FastAPI runs `async def` routes directly on the single shared event loop, so a blocking synchronous call inside one didn't yield — it stalled the *entire server*, including unrelated requests like `/health`, for the full duration of that chat turn. Found via the integration test suite (`test_loki.py`): isolated test functions passed, but the full suite reliably hung on `ReadTimeout` once enough sequential turns had run. Confirmed by a direct check (`curl /health` during an in-flight chat turn took multiple seconds instead of ~5ms). **Fix: `async def chat(...)` → `def chat(...)`.** A plain (non-async) FastAPI route runs in a background thread pool instead of the event loop, so concurrent requests no longer block each other. Verified: full suite runtime dropped from ~450s to ~90s after the fix, with 0 timeouts across three consecutive full runs. |
 
 ---
 

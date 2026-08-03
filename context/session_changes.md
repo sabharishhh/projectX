@@ -1,4 +1,4 @@
-# projectX — session changes
+# loki — session changes
 
 ## Retrieval engine (Rust, `memory-engine`)
 - Replaced BM25+dense hybrid with **dense (bge-base-en) + cross-encoder rerank (bge-reranker-v2-m3)** — BM25 dropped after a confirmed stopword-collision bug (a "the" match ranked an unrelated fact #1)

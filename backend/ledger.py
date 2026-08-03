@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime, timezone
 
-LEDGER_DB = "projectx.db"  # same file as messages, separate table
+LEDGER_DB = "loki.db"  # same file as messages, separate table
 
 
 def init_ledger():
