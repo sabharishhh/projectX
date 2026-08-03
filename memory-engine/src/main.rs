@@ -9,6 +9,7 @@ use axum::{
 };
 use memory_engine::{valid_branch_name, Commit, MemoryStore, MemoryUnit, Provenance, UnitChange, UnitType};
 use memory_engine::reranker::Reranker;
+use memory_engine::entity::{Edge, Entity, EntityType, entity_mediated_neighbors};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
@@ -69,6 +70,42 @@ struct ForgetRequest {
     summary: String,
     #[serde(default = "default_branch")]
     branch: String,
+}
+
+#[derive(Deserialize)]
+struct EdgeRequest {
+    from: String,
+    to: String,
+    relation: String,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+struct ResolveEntityRequest {
+    name: String,
+    entity_type: EntityType,
+}
+
+#[derive(Deserialize)]
+struct PutEntityRequest {
+    name: String,
+    entity_type: EntityType,
+    #[serde(default)]
+    alias: Option<String>,
+}
+
+#[derive(Serialize)]
+struct EntityView {
+    hash: String,
+    #[serde(flatten)]
+    entity: Entity,
+}
+
+#[derive(Serialize)]
+struct EdgeView {
+    hash: String,
+    #[serde(flatten)]
+    edge: Edge,
 }
 
 #[derive(Serialize)]
@@ -151,6 +188,10 @@ struct RetrievedUnitView {
     #[serde(flatten)]
     unit: MemoryUnit,
     score: f64,
+    // None = ranked normally by dense/BM25/rerank; Some = pulled in
+    // because it's a 1-hop graph neighbor of a top-ranked unit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    via_edge_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -205,6 +246,38 @@ async fn branches(State(app): State<Arc<AppState>>) -> Result<Json<Vec<String>>,
     app.store.list_branches().map_err(internal).map(Json)
 }
 
+/// Checks whether an entity already exists for this name+type on a
+/// branch, before capture.py decides whether to create a new one or
+/// reuse the existing hash as an edge target.
+async fn resolve_entity(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<ResolveEntityRequest>,
+) -> Result<Json<Option<EntityView>>, ApiError> {
+    let found = app.store.resolve_entity(&req.name, req.entity_type).map_err(internal)?;
+    Ok(Json(found.map(|(hash, entity)| EntityView { hash, entity })))
+}
+
+/// Creates a new entity, or adds an alias to an existing one if the
+/// name+type already resolves. Idempotent-ish: calling this twice with
+/// the same name+type+alias converges to one entity record.
+async fn put_entity(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<PutEntityRequest>,
+) -> Result<Json<EntityView>, ApiError> {
+    let hash = app.store.put_entity(&req.name, req.entity_type, req.alias.as_deref()).map_err(internal)?;
+    let entity = app.store.get_entity(&hash).map_err(internal)?;
+    Ok(Json(EntityView { hash, entity }))
+}
+
+/// All entities tracked, globally — used by capture.py to build the
+/// known-entities prompt block with no branch argument needed.
+async fn list_entities(
+    State(app): State<Arc<AppState>>,
+) -> Result<Json<Vec<EntityView>>, ApiError> {
+    let entities = app.store.list_entities().map_err(internal)?;
+    Ok(Json(entities.into_iter().map(|(hash, entity)| EntityView { hash, entity }).collect()))
+}
+
 async fn state(
     State(app): State<Arc<AppState>>,
     Query(q): Query<BranchQuery>,
@@ -218,8 +291,6 @@ async fn remember(
     State(app): State<Arc<AppState>>,
     Json(req): Json<RememberRequest>,
 ) -> Result<Json<UnitView>, ApiError> {
-    check_branch(&req.branch)?;
-
     let mut unit = MemoryUnit::new(req.content, req.unit_type, req.provenance, req.source.clone());
     unit.deadline = req.deadline;
     unit.commitment_status = req.commitment_status;
@@ -298,6 +369,30 @@ async fn forget(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// Stores a relates_to edge between two already-committed units on a
+/// branch. Deliberately NOT part of the commit/history graph — edges are
+/// auxiliary retrieval structure, not versioned facts, so they don't
+/// need their own commit entry. Content-addressable like everything
+/// else in the store, so identical (from, to, reason) posted twice
+/// dedupes to the same hash instead of piling up duplicates.
+async fn add_edge(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<EdgeRequest>,
+) -> Result<Json<EdgeView>, ApiError> {
+
+    if !app.store.has(&req.from) {
+        return Err((StatusCode::BAD_REQUEST, format!("unknown unit: {}", req.from)));
+    }
+    if !app.store.has(&req.to) {
+        return Err((StatusCode::BAD_REQUEST, format!("unknown unit: {}", req.to)));
+    }
+
+    let edge = Edge::new(req.from, req.to, req.relation, req.reason);
+    let hash = app.store.put_edge(&edge).map_err(internal)?;
+
+    Ok(Json(EdgeView { hash, edge }))
+}
+
 async fn memory_search(
     State(app): State<Arc<AppState>>,
     Query(q): Query<SearchQuery>,
@@ -321,7 +416,7 @@ async fn retrieve(
 
     let mut out: Vec<RetrievedUnitView> = pinned
         .into_iter()
-        .map(|(hash, unit)| RetrievedUnitView { hash, unit, score: PINNED_SENTINEL_SCORE })
+        .map(|(hash, unit)| RetrievedUnitView { hash, unit, score: PINNED_SENTINEL_SCORE, via_edge_reason: None })
         .collect();
 
     let app2 = app.clone();
@@ -364,13 +459,50 @@ async fn retrieve(
     const MIN_RERANK_SCORE: f32 = 0.1;
 
     let remaining = req.max_units.saturating_sub(out.len());
+    let ranked_units: Vec<(String, MemoryUnit, f32)> = reranked
+        .into_iter()
+        .filter(|(_, _, score)| *score >= MIN_RERANK_SCORE)
+        .take(remaining)
+        .collect();
+
+    let seed_hashes: Vec<String> = ranked_units.iter().map(|(h, _, _)| h.clone()).collect();
+
     out.extend(
-        reranked
+        ranked_units
             .into_iter()
-            .filter(|(_, _, score)| *score >= MIN_RERANK_SCORE)
-            .take(remaining)
-            .map(|(hash, unit, score)| RetrievedUnitView { hash, unit, score: score as f64 }),
+            .map(|(hash, unit, score)| RetrievedUnitView { hash, unit, score: score as f64, via_edge_reason: None }),
     );
+
+    // Graph expansion: pull in 1-hop neighbors of the ranked set that
+    // didn't make it on their own — fills the remaining budget only,
+    // never displaces a unit that scored well independently. Silent no-op
+    // if the branch has no edges yet or the budget's already full.
+    let slots_left = req.max_units.saturating_sub(out.len());
+    if slots_left > 0 && !seed_hashes.is_empty() {
+        let edges = app.store.list_edges().map_err(internal)?;
+            let neighbors = entity_mediated_neighbors(&seed_hashes, &edges);
+
+        let mut seen: std::collections::HashSet<String> = out.iter().map(|u| u.hash.clone()).collect();
+        for (hash, relation, reason) in neighbors {
+            if seen.contains(&hash) {
+                continue;
+            }
+            // The neighbor hash might be a MemoryUnit or an Entity —
+            // only units are retrievable as RetrievedUnitView content;
+            // an Entity neighbor is a graph node, not directly
+            // displayable the same way. Try unit first, skip silently
+            // if it resolves to an entity instead (a future
+            // enhancement could surface entity neighbors distinctly).
+            if let Ok(unit) = app.store.get(&hash) {
+                let tag = format!("{relation}: {reason}");
+                out.push(RetrievedUnitView { hash: hash.clone(), unit, score: 0.0, via_edge_reason: Some(tag) });
+                seen.insert(hash);
+            }
+            if out.len() >= req.max_units {
+                break;
+            }
+        }
+    }
 
     Ok(Json(out))
 }
@@ -546,6 +678,7 @@ async fn main() {
         .route("/remember", post(remember))
         .route("/supersede", post(supersede))
         .route("/forget", post(forget))
+        .route("/edge", post(add_edge))
         .route("/retrieve", post(retrieve))
         .route("/history", get(history))
         .route("/reset", post(reset))
@@ -556,6 +689,9 @@ async fn main() {
         .route("/state-at-time", post(state_at_time))
         .route("/commitments/due", get(commitments_due))
         .route("/commitments/open", get(commitments_open))
+        .route("/entity/resolve", post(resolve_entity))
+        .route("/entity", post(put_entity))
+        .route("/entities", get(list_entities))
         .with_state(app_state)
         .layer(CorsLayer::permissive());
 

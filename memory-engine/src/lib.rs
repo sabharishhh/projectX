@@ -5,10 +5,12 @@ pub mod unit;
 pub mod embedding;
 pub mod reranker;
 mod bm25;
+pub mod entity;
 
 pub use commit::{Commit, UnitChange};
 pub use store::{valid_branch_name, MemoryStore, StoreError};
 pub use unit::{MemoryUnit, UnitType, Provenance, CommitmentStatus};
+pub use entity::{Entity, EntityType, Edge, entity_mediated_neighbors};
 
 #[cfg(test)]
 mod tests {
