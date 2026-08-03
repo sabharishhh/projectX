@@ -5,7 +5,7 @@
   
   import ActivityStrip from "./lib/components/ActivityStrip.svelte";
   import ConflictBlock from "./lib/components/ConflictBlock.svelte";
-  import MemoryPanel from "./lib/components/MemoryPanel.svelte";
+  import SidePanel from "./lib/components/SidePanel.svelte";
   import ConversationSidebar from "./lib/components/ConversationSidebar.svelte";
   import { renderMarkdown } from "./lib/markdown.js";
   import ForgetBlock from "./lib/components/ForgetBlock.svelte";
@@ -16,6 +16,13 @@
   import { Prec } from "@codemirror/state";
   import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
   import { tags as t, Tag, styleTags } from "@lezer/highlight";
+
+
+  import Button from './lib/components/ui/Button.svelte';
+  import InlineNotification from './lib/components/ui/InlineNotification.svelte';
+  import Loading from './lib/components/ui/Loading.svelte';
+  import OpenPanelLeft from 'carbon-icons-svelte/lib/OpenPanelLeft.svelte';
+  import OpenPanelRight from 'carbon-icons-svelte/lib/OpenPanelRight.svelte';
 
   const API_BASE = "http://127.0.0.1:8000";
   const MEMORY_BASE = "http://127.0.0.1:8100";
@@ -142,10 +149,8 @@
   
   // UI States
   let sidebarOpen = $state(true);
-  let panelOpen = $state(true);
+  let panelOpen = $state(false);
   let scroller;
-  let panelWidth = $state(Number(localStorage.getItem("projectx-panel-width")) || 300);
-  let resizingPanel = false;
 
   onMount(async () => {
     await Promise.all([loadMessages(), loadMemory(), loadHistory(), loadConversations()]);
@@ -454,7 +459,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400..700;1,400..700&family=Hanken+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet"
   />
 
@@ -481,25 +486,14 @@
     <header>
       <div class="left-actions">
         {#if !sidebarOpen}
-          <button class="icon-btn" onclick={() => (sidebarOpen = true)} title="Open sidebar">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-              <line x1="9" y1="3" x2="9" y2="21"></line>
-            </svg>
-          </button>
+          <Button kind="ghost" size="small" icon={OpenPanelLeft} iconDescription="Open sidebar" onclick={() => (sidebarOpen = true)} />
         {/if}
       </div>
-      
+      <Button kind="ghost" size="small" onclick={clearChat}>Clear chat</Button>
+      <Button kind="ghost" size="small" onclick={clearMemory}>Clear memory</Button>
       <div class="actions">
-        <button onclick={clearChat} class="text-btn">Clear chat</button>
-        <button onclick={clearMemory} class="text-btn">Clear memory</button>
         {#if !panelOpen}
-          <button class="icon-btn" onclick={() => (panelOpen = true)} title="Open memory">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-              <line x1="15" y1="3" x2="15" y2="21"></line>
-            </svg>
-          </button>
+          <Button kind="ghost" size="small" icon={OpenPanelRight} iconDescription="Open panel" onclick={() => (panelOpen = true)} />
         {/if}
       </div>
     </header>
@@ -533,7 +527,7 @@
             <div class="prose">{@html renderMarkdown(msg.content, citationSources(msg.activity))}</div>
 
             {#if msg.error}
-              <div class="error"><span class="tag">error</span>{msg.error}</div>
+              <InlineNotification kind="error" title="Error" subtitle={msg.error} />
             {/if}
 
             {#each groupedActivity(msg.activity) as act}
@@ -558,34 +552,38 @@
           placeholder="Ask ProjectX"
         />
       </div>
-      <button class="send" onclick={() => sendMessage()} disabled={streaming}>
-        {streaming ? "…" : "Send"}
-      </button>
+      <Button size="field" kind="primary" disabled={streaming} onclick={() => sendMessage()}>
+    {#if streaming}
+      <Loading small withOverlay={false} description="Sending" />
+    {:else}
+      Send
+    {/if}
+  </Button>
     </div>
   </section>
 
-  {#if panelOpen}
-    <div class="panel-wrap" transition:slide={{ axis: 'x', duration: 300, easing: cubicOut }}>
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="resize-handle" onpointerdown={startResize}></div>
-      <div class="panel-inner" style="width: {panelWidth}px">
-        <MemoryPanel {memory} {history} onopensource={(sourceId) => console.log("Source clicked:", sourceId)} ondelete={deleteMemoryItem} onedit={editMemoryItem} oncreate={createCommitment} onToggle={() => (panelOpen = false)} />
-      </div>
-    </div>
-  {/if}
+  <SidePanel
+    open={panelOpen}
+    {memory} {history} {messages}
+    onClose={() => (panelOpen = false)}
+    onopensource={(sourceId) => console.log("Source clicked:", sourceId)}
+    ondelete={deleteMemoryItem}
+    onedit={editMemoryItem}
+    oncreate={createCommitment}
+  />
 </div>
 
 <style>
   .app {
     display: grid;
-    grid-template-columns: auto 1fr auto; 
+    grid-template-columns: auto 1fr;
     height: 100vh;
     font-family: var(--font-voice);
     color: var(--text-primary);
     background-color: var(--surface-page);
     background-image:
-      linear-gradient(color-mix(in srgb, var(--accent-memory) 5%, transparent) 1px, transparent 1px),
-      linear-gradient(90deg, color-mix(in srgb, var(--accent-memory) 5%, transparent) 1px, transparent 1px);
+      linear-gradient(color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 5%, transparent) 1px, transparent 1px);
     background-size: 26px 26px;
   }
 
@@ -627,23 +625,7 @@
     overflow: hidden;
   }
   
-  .panel-wrap {
-    grid-column: 3;
-    height: 100%;
-    overflow: hidden;
-    display: flex;
-  }
 
-  .resize-handle {
-    width: 5px;
-    flex-shrink: 0;
-    cursor: ew-resize;
-    background: transparent;
-  }
-  .resize-handle:hover,
-  .resize-handle:active {
-    background: var(--accent-memory);
-  }
 
   .chat {
     grid-column: 2; /* Forces the chat to always span the middle column */
@@ -656,16 +638,6 @@
   .sidebar-inner {
     width: 220px;
     height: 100%;
-  }
-
-  .panel-inner {
-    height: 100%;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--space-4);
-    border-left: 0.5px solid var(--border-hairline);
-    background: var(--surface-veil);
-    box-sizing: border-box;
   }
 
   header {
@@ -683,22 +655,6 @@
     gap: 0.4rem;
   }
 
-  .text-btn {
-    font-family: var(--font-technical);
-    font-size: 0.68rem;
-    letter-spacing: 0.03em;
-    color: var(--text-secondary);
-    background: none;
-    border: 0.5px solid var(--border-hairline);
-    border-radius: var(--radius-sm);
-    padding: 0.3rem 0.55rem;
-    cursor: pointer;
-  }
-
-  .text-btn:hover {
-    color: var(--accent-memory);
-    border-color: var(--accent-memory);
-  }
 
   .processing-container {
     display: flex;
@@ -735,31 +691,6 @@
     }
   }
 
-  .icon-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 2rem;
-    height: 2rem;
-    padding: 0; 
-    background: none;
-    border: 0.5px solid var(--border-hairline);
-    color: var(--text-secondary);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-  }
-  
-  .icon-btn svg {
-    width: 1.25rem;
-    height: 1.25rem;
-    flex-shrink: 0;
-  }
-  
-  .icon-btn:hover {
-    color: var(--accent-memory);
-    border-color: var(--accent-memory);
-  }
-
   .stream {
     flex: 1;
     overflow-y: auto;
@@ -782,10 +713,10 @@
   }
   .said {
     max-width: 34rem;
-    background: var(--text-primary);
-    color: var(--surface-page);
+    background: var(--accent-primary-bg);
+    color: var(--text-primary);
     padding: 0.55rem 0.85rem;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     font-size: 0.92rem;
     line-height: 1.5;
     white-space: pre-wrap;
@@ -854,7 +785,7 @@
   }
   
   .prose :global(a) {
-    color: var(--accent-memory);
+    color: var(--accent-primary);
   }
 
   .prose :global(.citation) {
@@ -864,7 +795,7 @@
   .prose :global(.citation a) {
     font-size: 0.7em;
     vertical-align: super;
-    color: var(--accent-search);
+    color: var(--accent-primary);
     background: var(--surface-sunken);
     border-radius: 3px;
     padding: 0 0.3em;
@@ -873,7 +804,7 @@
   }
   .prose :global(.citation a:hover) {
     color: var(--surface-page);
-    background: var(--accent-search);
+    background: var(--accent-primary);
   }
   .prose :global(.citation::after) {
     content: attr(data-preview);
@@ -902,10 +833,12 @@
   }
 
   .prose :global(blockquote) {
-    border-left: 2px solid var(--border-hairline);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-sm);
     margin: 0.6rem 0;
-    padding-left: 0.8rem;
+    padding: var(--space-2) var(--space-3);
     color: var(--text-secondary);
+    font-style: italic;
   }
 
   .prose :global(code) {
@@ -949,35 +882,35 @@
     margin: 0.8rem 0;
     border-radius: 6px;
     overflow: hidden;
-    background: #292a28;
+    background: var(--surface-sunken);
   }
   .prose :global(.code-block-header) {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 0.4rem 0.75rem;
-    background: #201f1d;
-    border-bottom: 1px solid #3a3b38;
+    background: var(--surface-raised);
+    border-bottom: 1px solid var(--border-hairline);
   }
   .prose :global(.code-lang) {
     font-family: var(--font-technical);
     font-size: 0.7rem;
-    color: #9aa39a;
+    color: var(--text-muted);
     text-transform: lowercase;
   }
   .prose :global(.copy-btn) {
     font-family: var(--font-technical);
     font-size: 0.68rem;
-    color: #cfd3cc;
+    color: var(--text-secondary);
     background: none;
-    border: 1px solid #4a4b47;
-    border-radius: 3px;
+    border: none;
+    border-radius: var(--radius-sm);
     padding: 0.15rem 0.5rem;
     cursor: pointer;
   }
   .prose :global(.copy-btn:hover) {
-    border-color: var(--accent-memory);
-    color: var(--accent-memory);
+    background: var(--surface-sunken);
+    color: var(--accent-primary-soft);
   }
   .prose :global(.code-block pre) {
     margin: 0;
@@ -987,25 +920,9 @@
   .prose :global(.code-block code) {
     font-family: var(--font-technical);
     font-size: 0.82rem;
-    color: #e4e6e1;
+    color: var(--text-primary);
     background: none !important;
     padding: 0;
-  }
-
-  .error {
-    margin-top: 0.6rem;
-    padding: 0.5rem 0.7rem;
-    border-left: 2px solid var(--border-danger);
-    background: var(--bg-danger);
-    font-size: 0.85rem;
-  }
-  .error .tag {
-    font-family: var(--font-technical);
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-danger);
-    margin-right: 0.5rem;
   }
 
   .empty {
@@ -1022,26 +939,7 @@
     padding: 1rem 1.5rem 1.4rem;
     border-top: 0.5px solid var(--border-hairline);
   }
-  .send {
-    font-family: var(--font-technical);
-    font-size: 0.82rem;
-    letter-spacing: 0.025em;
-    padding: 0 1.0rem;
-    height: calc(3.0rem + 1px);
-    background: var(--accent-memory);
-    color: var(--surface-page);
-    border: none;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
 
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .send:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
   .editor-wrapper :global(.cm-gutters) {
     display: none !important;
   }

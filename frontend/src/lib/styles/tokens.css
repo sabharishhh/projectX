@@ -29,7 +29,7 @@
   --border-strong:color-mix(in srgb, var(--neutral-05) 20%, transparent);
   --border-danger:color-mix(in srgb, var(--danger) 40%, transparent);
 
-  --accent-primary:var(--primary-40);
+  --accent-primary:var(--primary-30);
   --accent-primary-bg:var(--primary-90);
   --accent-primary-soft:var(--primary-30);
   --accent-attention:var(--amber);

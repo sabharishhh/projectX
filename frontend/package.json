@@ -16,7 +16,6 @@
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.1",
     "@codemirror/view": "^6.43.7",
-    "carbon-components-svelte": "^0.109.0",
     "carbon-icons-svelte": "^13.14.0",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.7",

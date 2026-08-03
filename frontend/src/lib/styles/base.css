@@ -19,7 +19,7 @@ button {
   border:0.5px solid var(--border-strong); border-radius:var(--radius-sm);
   padding:var(--space-2) var(--space-3); color:var(--text-primary);
   transition:background var(--dur-fast) var(--ease-out),
-             transform var(--dur-instant) var(--ease-out);
+              transform var(--dur-instant) var(--ease-out);
 }
 button:hover { background:var(--surface-sunken); }
 button:active { transform:scale(.985); }

@@ -5,115 +5,113 @@
   let { act } = $props();
 
   const KINDS = {
-    memory_read:  { icon:'ti-notebook',      accent:'var(--accent-memory)' },
-    memory_write: { icon:'ti-writing',       accent:'var(--accent-memory)' },
-    skill:        { icon:'ti-pencil',        accent:'var(--accent-skill)' },
-    searching:    { icon:'ti-radar',         accent:'var(--accent-search)' },
-    search:       { icon:'ti-world-search',  accent:'var(--accent-search)' },
-    search_failed:{ icon:'ti-plug-off',      accent:'var(--accent-attention)' },
-    tool_group:   { icon:'ti-world-search',  accent:'var(--accent-search)' }
+    memory_read:       { icon:'ti-notebook',      accent:'var(--accent-primary)' },
+    memory_write:      { icon:'ti-writing',       accent:'var(--accent-primary)' },
+    time_travel:       { icon:'ti-history',       accent:'var(--accent-primary)' },
+    duplicate_skipped: { icon:'ti-copy-off',      accent:'var(--text-muted)' },
+    skill:             { icon:'ti-pencil',        accent:'var(--accent-primary)' },
+    searching:         { icon:'ti-radar',         accent:'var(--accent-primary)' },
+    search:            { icon:'ti-world-search',  accent:'var(--accent-primary)' },
+    search_failed:     { icon:'ti-plug-off',      accent:'var(--accent-attention)' },
+    tool_group:        { icon:'ti-world-search',  accent:'var(--accent-primary)' }
   };
 
-  const m = $derived(KINDS[act.kind] ?? { icon:'ti-point', accent:'var(--accent-skill)' });
+  const m = $derived(KINDS[act.kind] ?? { icon:'ti-point', accent:'var(--accent-primary)' });
+  const active = $derived(act.kind === 'searching' || act.kind === 'skill');
 </script>
 
-{#if act.units?.length}
-  <Collapsible label={act.label} icon={m.icon} accent={m.accent} count={act.units.length}>
-    <ul class="units">
-      {#each act.units as u}
-        <li in:reveal>
-          <span class={u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}>
-            {u.content}
-          </span>
-          {#if u.deadline}
-            <span class="technical type">due {new Date(u.deadline).toLocaleDateString()}</span>
-          {:else}
-            <span class="technical type">{u.unit_type}</span>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  </Collapsible>
-{:else if act.results?.length}
-  <Collapsible label={act.label} icon={m.icon} accent={m.accent} count={act.results.length}>
-    <ul class="results">
-      {#each act.results as r}
-        <li in:reveal>
-          <a href={r.url} target="_blank" rel="noreferrer">{r.title}</a>
-          <p class="summary">{r.summary}</p>
-        </li>
-      {/each}
-    </ul>
-  </Collapsible>
-{:else if act.steps?.length}
-  <Collapsible label={act.label} icon={m.icon} accent={m.accent} count={act.steps.length}>
-    <ul class="steps">
-      {#each act.steps as step}
-        <li in:reveal>{step}</li>
-      {/each}
-    </ul>
-  </Collapsible>
-{:else}
-  <p 
-    class="line" 
-    style="--accent:{m.accent}" 
-    class:pulsing={act.kind === 'searching' || act.kind === 'skill'} 
-    class:completed={act.kind !== 'searching' && act.kind !== 'skill'}
-  >
-    <i class="ti {m.icon}" aria-hidden="true"></i>{act.label}
-  </p>
-{/if}
+<div class="trace-row" in:reveal style="--accent:{m.accent}">
+  <span class="node" class:pulsing={active}>
+    <i class="ti {m.icon}" aria-hidden="true"></i>
+  </span>
+
+  <div class="trace-content">
+    {#if act.units?.length}
+      <Collapsible label={act.label} count={act.units.length} accent={m.accent}>
+        <ul class="units">
+          {#each act.units as u}
+            <li in:reveal>
+              <span class={u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}>
+                {u.content}
+              </span>
+              {#if u.deadline}
+                <span class="technical type">due {new Date(u.deadline).toLocaleDateString()}</span>
+              {:else}
+                <span class="technical type">{u.unit_type}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </Collapsible>
+    {:else if act.results?.length}
+      <Collapsible label={act.label} count={act.results.length} accent={m.accent}>
+        <ul class="results">
+          {#each act.results as r}
+            <li in:reveal>
+              <a href={r.url} target="_blank" rel="noreferrer">{r.title}</a>
+              <p class="summary">{r.summary}</p>
+            </li>
+          {/each}
+        </ul>
+      </Collapsible>
+    {:else if act.steps?.length}
+      <Collapsible label={act.label} count={act.steps.length} accent={m.accent}>
+        <ul class="steps">
+          {#each act.steps as step}
+            <li in:reveal>{step}</li>
+          {/each}
+        </ul>
+      </Collapsible>
+    {:else}
+      <p class="line" class:completed={!active}>{act.label}</p>
+    {/if}
+  </div>
+</div>
 
 <style>
+  .trace-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    margin: var(--space-2) 0 0;
+  }
+
+  /* The node is the one visual thread tying every kind of agent activity
+     together — memory, search, skill, tool steps — whether the entry
+     below it is a single line or an expandable Collapsible. */
+  .node {
+    flex-shrink: 0;
+    width: 22px; height: 22px;
+    margin-top: 1px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+  }
+  .node i { font-size: 12px; }
+
+  /* Pulses only while genuinely in flight — every other state, including
+     search_failed, is static, so the eye isn't drawn everywhere at once. */
+  .node.pulsing { animation: node-breathe 2.2s var(--ease-inout) infinite; }
+  @keyframes node-breathe {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 30%, transparent); }
+    50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent); }
+  }
+
+  .trace-content { flex: 1; min-width: 0; padding-top: 2px; }
+  .trace-content :global(.collapsible) { margin-top: 0 !important; }
+
   .line {
-    display:flex; align-items:center; gap:var(--space-2); margin:0.4rem 0 0;
-    font-size:var(--size-meta); color:var(--text-secondary);
+    margin: 0;
+    font-size: var(--size-meta);
+    color: var(--text-secondary);
   }
-  .line i { font-size:15px; color:var(--accent); }
-  
-  /* Dimmed, italic style for completed actions */
-  .line.completed { 
-    color: var(--text-muted); 
-    font-style: italic; 
-  }
-
-  /* Animated gradient for active searching */
-  .pulsing {
-    background: linear-gradient(
-      90deg,
-      var(--text-muted) 0%,
-      var(--text-muted) 45%,
-      var(--text-primary) 50%, /* Swapped from var(--accent) to bright text color */
-      var(--text-muted) 55%,
-      var(--text-muted) 100%
-    );
-    background-size: 300% 100%;
-    color: transparent;
-    -webkit-background-clip: text;
-    background-clip: text;
-    animation: shine 3s linear infinite;
-  }
-
-  .pulsing i { 
-    /* This keeps the icon itself the accent color (blue) */
-    color: var(--accent); 
-    animation: breathe 3s var(--ease-inout) infinite; 
-  }
-
-  @keyframes shine {
-    0% { background-position: 100% center; }
-    100% { background-position: -100% center; }
-  }
-
-  @keyframes breathe { 
-    0%, 100% { opacity: 0.5; } 
-    50% { opacity: 1; } 
-  }
+  .line.completed { color: var(--text-muted); }
 
   .units, .results, .steps { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:var(--space-2); }
   .units li { font-size:var(--size-meta); line-height:var(--leading-tight); }
   .type { display:block; color:var(--text-muted); margin-top:2px; }
-  .results a { color:var(--accent-search); font-size:var(--size-meta); }
+  .results a { color:var(--accent-primary-soft); font-size:var(--size-meta); }
   .results .summary { margin:2px 0 0; color:var(--text-secondary); font-size:var(--size-caption); }
   .steps li { font-size:var(--size-meta); color:var(--text-secondary); line-height:var(--leading-tight); }
 </style>
