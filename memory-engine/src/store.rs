@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::commit::{Commit, UnitChange};
 use crate::unit::{MemoryUnit, UnitType, CommitmentStatus};
+use crate::entity::{Entity, EntityType, Edge};
 
 use regex::Regex;
 use crate::bm25::BM25Store;
@@ -151,7 +152,127 @@ impl MemoryStore {
     /// this catches exact/rare terms a paraphrase-tolerant embedding can
     /// under-rank.
     pub fn bm25_scores(&self, branch: &str, query: &str, limit: usize) -> Result<HashMap<String, f64>, StoreError> {
-        self.bm25.search(branch, query, limit)
+         self.bm25.search(branch, query, limit)
+     }
+
+    // --- entities ---
+
+    fn entity_index_path(&self) -> PathBuf {
+        self.root.join("entities").join("index.json")
+    }
+
+    /// resolution_key -> current entity object hash, per branch. Mutable —
+    /// overwritten in place, same pattern as refs/HEAD — because an
+    /// entity's canonical identity persists across updates (new aliases,
+    /// etc.) even though each version is stored content-addressed.
+    fn load_entity_index(&self) -> Result<HashMap<String, String>, StoreError> {
+        match fs::read(self.entity_index_path()) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn save_entity_index(&self, index: &HashMap<String, String>) -> Result<(), StoreError> {
+        let path = self.entity_index_path();
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(path, serde_json::to_vec(index)?)?;
+        Ok(())
+    }
+
+    /// Looks up an existing entity by name+type on a branch. Returns the
+    /// (hash, Entity) if one already resolves to this key — the check
+    /// capture.py's entity-resolution step calls before deciding whether
+    /// to create a new entity or reuse an existing one.
+    pub fn resolve_entity(&self, name: &str, entity_type: EntityType) -> Result<Option<(String, Entity)>, StoreError> {
+        let key = Entity::resolution_key(name, entity_type);
+        let index = self.load_entity_index()?;
+        match index.get(&key) {
+            Some(hash) => Ok(Some((hash.clone(), self.get_object(hash)?))),
+            None => Ok(None),
+        }
+    }
+
+    /// Creates a new entity, or updates an existing one's aliases if
+    /// `name`+`entity_type` already resolves. Always writes a fresh
+    /// content-addressed object (entities are otherwise immutable, same as
+    /// units), then repoints the mutable index entry at the new hash.
+    pub fn put_entity(&self, name: &str, entity_type: EntityType, new_alias: Option<&str>) -> Result<String, StoreError> {
+        let key = Entity::resolution_key(name, entity_type);
+        let mut index = self.load_entity_index()?;
+
+        let entity = match index.get(&key) {
+            Some(existing_hash) => {
+                let mut e: Entity = self.get_object(existing_hash)?;
+                if let Some(alias) = new_alias {
+                    if !e.aliases.iter().any(|a| a.eq_ignore_ascii_case(alias)) {
+                        e.aliases.push(alias.to_string());
+                    }
+                }
+                e
+            }
+            None => Entity::new(name.to_string(), entity_type),
+        };
+
+        let hash = self.put_object(&entity)?;
+        index.insert(key, hash.clone());
+        self.save_entity_index(&index)?;
+        Ok(hash)
+    }
+
+    pub fn get_entity(&self, hash: &str) -> Result<Entity, StoreError> {
+        self.get_object(hash)
+    }
+
+    pub fn list_entities(&self) -> Result<Vec<(String, Entity)>, StoreError> {
+        let index = self.load_entity_index()?;
+        index.values().map(|h| self.get_object(h).map(|e| (h.clone(), e))).collect()
+    }
+
+    // --- edges ---
+
+    fn edges_index_path(&self) -> PathBuf {
+        self.root.join("edges").join("index.json")
+    }
+
+    /// Stores an edge content-addressable, appends its hash to a flat
+    /// per-branch index. Edges live outside the commit/tree structure —
+    /// they're auxiliary retrieval and relationship structure, not
+    /// versioned facts, so no history replay or checkpointing needed.
+    pub fn put_edge(&self, edge: &Edge) -> Result<String, StoreError> {
+        let hash = self.put_object(edge)?;
+        let path = self.edges_index_path();
+        let mut hashes: Vec<String> = match fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e.into()),
+        };
+        if !hashes.contains(&hash) {
+            hashes.push(hash.clone());
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(&path, serde_json::to_vec(&hashes)?)?;
+        }
+        Ok(hash)
+    }
+
+    pub fn list_edges(&self) -> Result<Vec<Edge>, StoreError> {
+        let path = self.edges_index_path();
+        let hashes: Vec<String> = match fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        hashes.iter().map(|h| self.get_object(h)).collect()
+    }
+
+    /// Marks an edge invalid as of now, by rewriting it with t_invalid set
+    /// and appending the new version's hash to the index — the old (still
+    /// valid-at-the-time) version stays retrievable by its original hash,
+    /// same non-destructive philosophy as unit supersession.
+    pub fn invalidate_edge(&self, edge_hash: &str) -> Result<String, StoreError> {
+        let mut edge: Edge = self.get_object(edge_hash)?;
+        edge.t_invalid = Some(chrono::Utc::now());
+        self.put_edge(&edge)
     }
 
     /// Every branch that has at least one commit. A branch exists the
@@ -342,6 +463,17 @@ impl MemoryStore {
         if checkpoints_dir.exists() {
             fs::remove_dir_all(&checkpoints_dir)?;
         }
+
+        let edges_dir = self.root.join("edges");
+        if edges_dir.exists() {
+            fs::remove_dir_all(&edges_dir)?;
+        }
+
+        let entities_dir = self.root.join("entities");
+        if entities_dir.exists() {
+            fs::remove_dir_all(&entities_dir)?;
+        }
+
         Ok(())
     }
 

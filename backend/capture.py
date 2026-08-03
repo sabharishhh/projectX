@@ -14,6 +14,8 @@ DUPLICATE_SIMILARITY_THRESHOLD = 0.92
 
 CAPTURE_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.6-luna")
 
+ENTITY_TYPES = ["person", "project", "concept", "organization", "place", "animal", "other"]
+
 CAPTURE_PROMPT = """You extract durable facts about the user from a conversation turn.
 
 Capture ONLY things that will still be true and useful in a future conversation:
@@ -44,6 +46,26 @@ Capture ONLY things that will still be true and useful in a future conversation:
   preference: use "correction" only when the user is explicitly correcting
   a mistake or reasserting a rule that was violated or ignored, not for a
   first-time stated preference.
+- entities: OPTIONAL. Name any distinct people, projects, or concepts
+  this fact is clearly ABOUT — not every noun, only things worth
+  tracking as a recurring subject across future conversations (a
+  person's name, a named project, a specific ongoing concept). For
+  each, give a "name", an "entity_type" (one of: {entity_types}), and
+  a "relation" — a short verb phrase describing how the fact relates
+  to it (e.g. "has_pet", "works_on", "decided"). Check the known
+  entities list below first — if this is clearly the same
+  person/project as an existing entry (allowing for nicknames or
+  partial names — "Max" the dog, "the dog", "my dog" are the same
+  entity), reuse that exact name so it resolves to the same record
+  instead of creating a duplicate.
+
+IMPORTANT: resolving an entity's canonical name (above) is separate
+from writing the fact's "content". Keep "content" faithful to what was
+actually said in THIS exchange — if the user said "the dog" or "him",
+write the fact using that same wording, even if you've correctly
+resolved which entity it refers to in "entities". Do NOT substitute a
+resolved name into "content" when the exchange itself didn't use it —
+that would state something as fact that wasn't actually said.
 
 Do NOT capture:
 - questions they asked, or the content of tasks they gave you
@@ -89,6 +111,8 @@ listed domains. Never invent a branch name not in this list.
 
 Known facts already stored:
 {known}
+Known entities already tracked:
+{known_entities}
 
 If a new fact DIRECTLY CONTRADICTS one of the known facts above — same subject,
 different value — add "supersedes": "<the 8-char id in brackets>" to that unit.
@@ -96,11 +120,13 @@ Only for real contradictions, where both cannot be true at once. Do NOT use it
 for facts that merely relate to, extend, or sit alongside an existing one.
 
 Return JSON only, no other text:
-{{"units": [{{"content": "...", "unit_type": "preference", "provenance": "stated", "summary": "short plain-language note on what changed", "branch": "main", "supersedes": "a1b2c3d4", "deadline": "2026-08-05T00:00:00Z"}}]}}
+{{"units": [{{"content": "...", "unit_type": "preference", "provenance": "stated", "summary": "short plain-language note on what changed", "branch": "main", "supersedes": "a1b2c3d4", "deadline": "2026-08-05T00:00:00Z", "entities": [{{"name": "Max", "entity_type": "person", "relation": "has_pet"}}]}}]}}
 
 Omit "supersedes" entirely when the fact is new rather than a replacement.
 Omit "deadline" entirely for anything that isn't a commitment, or a
 commitment with no discernible deadline.
+Omit "entities" entirely (or leave it an empty list) if nothing is worth
+tracking as a recurring subject.
 Return {{"units": []}} if nothing is worth remembering."""
 
 VERIFY_PROMPT = """A fact-extraction pass proposed this candidate fact about
@@ -203,8 +229,22 @@ CAPTURE_SCHEMA = {
                     "branch": {"type": "string"},
                     "supersedes": {"type": ["string", "null"]},
                     "deadline": {"type": ["string", "null"]},
+                    "entities": {
+                         "type": "array",
+                         "items": {
+                             "type": "object",
+                             "properties": {
+                                "name": {"type": "string"},
+                                "entity_type": {"type": "string", "enum": ["person", "project", "concept", "organization", "place", "animal", "other"]},
+                                "relation": {"type": "string"},
+                             },
+
+                            "required": ["name", "entity_type", "relation"],
+                             "additionalProperties": False,
+                         },
+                     },
                 },
-                "required": ["content", "unit_type", "provenance", "summary", "branch", "supersedes", "deadline"],
+                "required": ["content", "unit_type", "provenance", "summary", "branch", "supersedes", "deadline", "entities"],
                 "additionalProperties": False,
             },
         },
@@ -327,6 +367,28 @@ def _known_facts_block(units: list[dict]) -> str:
         return "(none yet)"
     return "\n".join(f"- [{u['hash'][:8]}] {u['content']}" for u in units)
 
+def _known_entities_block(entities: list[dict]) -> str:
+    if not entities:
+        return "(none yet)"
+    lines = []
+    for e in entities:
+        aliases = f" (aka {', '.join(e['aliases'])})" if e.get("aliases") else ""
+        lines.append(f"- {e['name']} [{e['entity_type']}]{aliases}")
+    return "\n".join(lines)
+
+
+def fetch_known_entities() -> list[dict]:
+    """All entities tracked globally — deterministic list call, no LLM.
+    Used both to build the known-entities prompt block and, indirectly,
+    to let capture.py show the model what already exists so it reuses
+    names instead of minting duplicates."""
+    try:
+        r = client.get("/entities")
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.warning(f"fetch_known_entities failed: {e!r}")
+        return []
 
 def _verify_unit(provider, user_message: str, assistant_message: str, unit: dict) -> bool:
     """Second, narrow pass: is this candidate genuinely about the user?
@@ -359,10 +421,12 @@ def _verify_unit(provider, user_message: str, assistant_message: str, unit: dict
 
 
 def extract_units(provider, user_message: str, assistant_message: str,
-                  known: list[dict], branches: list[str]) -> list[dict]:
+                  known: list[dict], branches: list[str], known_entities: list[dict]) -> list[dict]:
     prompt = CAPTURE_PROMPT.format(
         known=_known_facts_block(known),
         branches=", ".join(branches),
+        known_entities=_known_entities_block(known_entities),
+        entity_types=", ".join(ENTITY_TYPES),
     )
     exchange = f"User: {user_message}\n\nAssistant: {assistant_message}"
 
@@ -381,6 +445,8 @@ def extract_units(provider, user_message: str, assistant_message: str,
             parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
             units = parsed.get("units", [])
 
+        
+
         for u in units:
             if u.get("branch") not in branches:
                 u["branch"] = "main"
@@ -390,6 +456,9 @@ def extract_units(provider, user_message: str, assistant_message: str,
                 u.pop("deadline", None)
             if u.get("unit_type") == "commitment":
                 u["commitment_status"] = "open"
+
+            if not u.get("entities"):
+                u.pop("entities", None)
 
         logger.info(f"extract_units raw: {len(units)} candidate(s) — "
                     f"{[(u.get('unit_type'), u.get('content')) for u in units]}")
@@ -486,6 +555,41 @@ def detect_commitment_resolutions(provider, user_message: str, assistant_message
             out.append({"unit": unit, "status": r["status"]})
     return out
 
+def _commit_entities(from_hash: str, unit: dict) -> None:
+    """For each entity a fact names, resolve-or-create the entity record,
+    then write a unit->entity temporal edge with the stated relation.
+    Never blocks or fails the parent commit — a missing entity link is a
+    fluidity gap, not a data-integrity problem, so failures here are
+    logged and swallowed rather than raised."""
+    for ent in unit.get("entities", []):
+        name = ent.get("name")
+        entity_type = ent.get("entity_type")
+        relation = ent.get("relation", "related_to")
+        if not name or not entity_type:
+            continue
+        try:
+            r = client.post(
+                "/entity",
+                json={"name": name, "entity_type": entity_type},
+            )
+            r.raise_for_status()
+            entity_hash = r.json().get("hash")
+            if not entity_hash:
+                logger.warning(f"entity commit returned no hash for {name!r}")
+                continue
+
+            edge_r = client.post(
+                "/edge",
+                json={
+                    "from": from_hash,
+                    "to": entity_hash,
+                    "relation": relation,
+                    "reason": unit.get("summary", unit["content"]),
+                },
+            )
+            edge_r.raise_for_status()
+        except Exception as e:
+            logger.warning(f"entity link failed {from_hash!r}->{name!r}: {e!r}") 
 
 def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
     try:
@@ -505,6 +609,13 @@ def commit_unit(unit: dict, source: str, branch: str = "main") -> bool:
         r = client.post("/remember", json=payload)
         r.raise_for_status()
         invalidate_state_cache(branch)
+
+        new_hash = r.json().get("hash")
+        if new_hash:
+            _commit_entities(new_hash, unit)
+        elif unit.get("entities"):
+            logger.warning("commit_unit: no hash in /remember response — skipping entity commit")
+
         return True
     except Exception as e:
         logger.warning(f"commit_unit failed for {unit.get('content', '')!r}: {e!r}")
@@ -529,6 +640,13 @@ def supersede_unit(from_hash: str, unit: dict, source: str, branch: str = "main"
         r = client.post("/supersede", json=payload)
         r.raise_for_status()
         invalidate_state_cache(branch)
+
+        new_hash = r.json().get("hash")
+        if new_hash:
+            _commit_entities(new_hash, unit)
+        elif unit.get("entities"):
+            logger.warning("supersede_unit: no hash in /supersede response — skipping entity commit")
+
         return True
     except Exception as e:
         logger.warning(f"supersede_unit failed for {from_hash!r}: {e!r}")

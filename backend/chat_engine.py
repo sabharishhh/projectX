@@ -16,7 +16,7 @@ import search_decision as search_decision_module
 from capture import (
     extract_units, commit_unit, is_semantic_duplicate, find_open_commitments,
     find_due_commitments, detect_commitment_resolutions, resolve_commitment,
-    check_correction_compliance,
+    check_correction_compliance, fetch_known_entities,
 )
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message, fetch_state_at_time
 from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
@@ -363,7 +363,9 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
     fact — extract_units/commit_unit already carry deadline/
     commitment_status through unchanged, nothing commitment-specific
     needed in this function itself."""
-    units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches)
+    known_entities = [] if forget_matches else fetch_known_entities()
+    units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches, known_entities)
+    added, conflicts = [], []
     added, conflicts = [], []
 
     for u in units:
