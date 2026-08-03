@@ -101,6 +101,49 @@ def list_conversations() -> list[dict]:
         for r in rows
     ]
 
+def _ensure_pending_table():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pending_state (
+            kind TEXT NOT NULL,
+            id TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (kind, id)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def load_pending(kind: str) -> dict[str, dict]:
+    """All not-yet-resolved conflict/forget entries of a given kind,
+    keyed by id — used once at startup to rehydrate PENDING/PENDING_FORGETS
+    after a restart."""
+    _ensure_pending_table()
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT id, payload FROM pending_state WHERE kind = ?", (kind,)).fetchall()
+    conn.close()
+    return {id_: json.loads(payload) for id_, payload in rows}
+
+
+def save_pending(kind: str, id_: str, payload: dict):
+    _ensure_pending_table()
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR REPLACE INTO pending_state (kind, id, payload, created_at) VALUES (?, ?, ?, datetime('now'))",
+        (kind, id_, json.dumps(payload)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_pending(kind: str, id_: str):
+    _ensure_pending_table()
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM pending_state WHERE kind = ? AND id = ?", (kind, id_))
+    conn.commit()
+    conn.close()
 
 def mark_conflict_status(conversation_id: str, conflict_id: str, resolution: str) -> bool:
     """Find the message that raised this conflict and record how it was

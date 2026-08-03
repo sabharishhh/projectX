@@ -366,7 +366,7 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
     known_entities = [] if forget_matches else fetch_known_entities()
     units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches, known_entities)
     added, conflicts = [], []
-    added, conflicts = [], []
+
 
     for u in units:
         if any(k["content"] == u["content"] for k in known):

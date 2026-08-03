@@ -1,4 +1,5 @@
 import os
+import db
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -22,6 +23,30 @@ CAPTURE_MODEL = os.getenv("CAPTURE_MODEL") or (
     model if os.getenv("PROVIDER") == "local" else "gpt-5.6-luna"
 )
 
-# conflicts/forgets awaiting the user's decision (in-process; lost on restart)
-PENDING: dict[str, dict] = {}
-PENDING_FORGETS: dict[str, dict] = {}
+class PersistentPendingDict(dict):
+    """Dict-like store for conflict/forget confirmations awaiting the
+    user's decision, backed by SQLite so a backend restart between
+    surfacing a choice and the user acting on it doesn't silently
+    discard that choice — every existing call site (PENDING[cid] = {...},
+    PENDING.pop(id, None)) keeps working unchanged; persistence is
+    transparent at the dict interface, not a new API to learn."""
+
+    def __init__(self, kind: str):
+        super().__init__(db.load_pending(kind))
+        self._kind = kind
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        db.save_pending(self._kind, key, value)
+
+    def pop(self, key, default=None):
+        value = super().pop(key, default)
+        db.delete_pending(self._kind, key)
+        return value
+
+
+# conflicts/forgets awaiting the user's decision — persisted to SQLite,
+# rehydrated on startup, so a restart between surfacing a choice and the
+# user acting on it no longer silently discards it
+PENDING = PersistentPendingDict("conflict")
+PENDING_FORGETS = PersistentPendingDict("forget")

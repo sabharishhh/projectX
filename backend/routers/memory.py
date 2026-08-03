@@ -12,7 +12,6 @@ router = APIRouter()
 @router.post("/api/memory/resolve")
 def resolve_conflict(req: ResolveRequest):
     p = PENDING.pop(req.conflict_id, None)
-
     if not p:
         db.mark_conflict_status(req.conversation_id, req.conflict_id, "expired")
         return {"ok": False, "reason": "already resolved or expired"}
