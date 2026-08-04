@@ -406,7 +406,16 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
     disconnected, if given, is checked before each individual write in
     the loop below — not just once before the phase starts — so a client
     that leaves partway through a multi-unit capture stops the remaining
-    writes instead of committing all of them regardless."""
+    writes instead of committing all of them regardless.
+
+    The duplicate-check wave below is a dynamic fan-out — a variable
+    number of candidates per turn, unlike the fixed named stages in
+    stream_chat's intake pipeline — built as a Stage list at call time
+    rather than declared statically, since the candidate count isn't
+    known until extract_units returns. Same Pipeline runner either way;
+    only the write loop after it stays hand-sequential, since concurrent
+    writes to the git-versioned memory store haven't been evaluated for
+    commit-ordering safety."""
 
     def _is_live_duplicate(k: dict, content: str) -> bool:
         if k["content"] != content:
@@ -419,27 +428,24 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
     units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches, known_entities)
     added, conflicts = [], []
 
-    # Duplicate-checking is read-only (/retrieve) and each candidate's
-    # check is independent — only candidates that survive the cheap
-    # verbatim check AND aren't an explicit supersede even need it, so
-    # only those run, concurrently. The write loop below stays strictly
-    # sequential: concurrent writes to the git-versioned memory store
-    # haven't been evaluated for commit-ordering safety, so this is a
-    # deliberate boundary, not an oversight.
     needs_dup_check = [
         i for i, u in enumerate(units)
         if not any(_is_live_duplicate(k, u["content"]) for k in known) and not u.get("supersedes")
     ]
-    dup_results = {}
+
+    dup_results: dict[int, bool] = {}
     if needs_dup_check:
-        with ThreadPoolExecutor(max_workers=len(needs_dup_check)) as pool:
-            futures = {i: pool.submit(is_semantic_duplicate, units[i], units[i].get("branch", "main")) for i in needs_dup_check}
-            for i in needs_dup_check:
-                try:
-                    dup_results[i] = futures[i].result()
-                except Exception as e:
-                    logger.warning(f"is_semantic_duplicate raised unexpectedly: {e!r} — treating as not-duplicate (fail open)")
-                    dup_results[i] = False
+        dup_stages = [
+            Stage(
+                name=f"dup_{i}",
+                deps=[],
+                on_fail="open",  # fail open — a missed duplicate is recoverable later, silently blocking a real new fact is not
+                fn=(lambda ctx, i=i: is_semantic_duplicate(units[i], units[i].get("branch", "main"))),
+            )
+            for i in needs_dup_check
+        ]
+        dup_context = Pipeline(dup_stages).run({})
+        dup_results = {i: bool(dup_context[f"dup_{i}"]) for i in needs_dup_check}
 
     for i, u in enumerate(units):
         if disconnected is not None and disconnected.is_set():
