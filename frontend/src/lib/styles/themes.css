@@ -1,0 +1,38 @@
+:root {
+  --surface-page:var(--neutral-100);
+  --surface-card:var(--neutral-80);
+  --surface-sunken:var(--neutral-60);
+  --surface-raised:var(--neutral-70);
+  --surface-veil:color-mix(in srgb, var(--neutral-100) 70%, transparent);
+  --surface-overlay-backdrop:color-mix(in srgb, var(--neutral-100) 55%, transparent);
+
+  --text-primary:var(--neutral-05);
+  --text-secondary:var(--neutral-30);
+  --text-muted:var(--neutral-40);
+  --text-danger:var(--danger-20);
+  --text-on-accent:var(--neutral-100);
+
+  --border-hairline:color-mix(in srgb, var(--neutral-05) 10%, transparent);
+  --border-strong:color-mix(in srgb, var(--neutral-05) 20%, transparent);
+  --border-danger:color-mix(in srgb, var(--danger-30) 40%, transparent);
+
+  --accent-primary:var(--primary-30);
+  --accent-primary-bg:var(--primary-90);
+  --accent-primary-soft:var(--primary-20);
+  --accent-primary-glow:color-mix(in srgb, var(--primary-30) 35%, transparent);
+
+  --accent-attention:var(--amber-30);
+  --accent-attention-bg:var(--amber-90);
+
+  --accent-danger:var(--danger-30);
+  --bg-danger:var(--danger-90);
+
+  /* legacy aliases — existing components (ActivityStrip, MemoryView, etc.) reference
+     these names directly; kept as a mapping layer so nothing breaks. Drop each alias
+     once its component is touched directly and can reference the semantic name above. */
+  --accent-memory:var(--accent-primary);
+  --accent-memory-bg:var(--accent-primary-bg);
+  --accent-search:var(--primary-20);
+  --accent-search-bg:var(--primary-90);
+  --accent-skill:var(--neutral-30);
+}

@@ -1,47 +1,21 @@
 :root {
-  /* neutral ramp — Carbon g100-aligned, dark-native */
-  --neutral-100:#161616;  --neutral-90:#1c1c1c;  --neutral-80:#232528;
-  --neutral-70:#2e2f31;   --neutral-60:#393939;  --neutral-50:#525252;
+  /* neutral ramp — darker, cooler-neutral dark-native */
+  --neutral-100:#0d0d0f;  --neutral-90:#131316;  --neutral-80:#1a1b1e;
+  --neutral-70:#212226;   --neutral-60:#2a2b30;  --neutral-50:#525252;
   --neutral-40:#6f6f6f;   --neutral-30:#8d8d8d;  --neutral-20:#c6c6c6;
   --neutral-10:#e0e0e0;   --neutral-05:#f4f4f4;
 
-  /* primary ramp — anchored to #8ECBFD */
-  --primary-90:#0f2c42; --primary-70:#1c4d70; --primary-50:#3d84b8;
-  --primary-40:#5aa3d6; --primary-30:#8ECBFD; --primary-20:#bfe2fb; --primary-10:#e4f3fd;
+  /* primary ramp — neon variant of the original #8ECBFD, same hue (207°), pushed to full saturation */
+  --primary-90:#4d85b4; --primary-70:#85c8ff; --primary-50:#6ba4d3;
+  --primary-40:#75bdf7; --primary-30:#85c8ff; --primary-20:#6fc1ff; --primary-10:#d9e4ed;
 
-  --amber:#d9a54b; --amber-soft:#3a2f18;
-  --danger:#e0685a; --danger-soft:#3a1e1a;
+  /* semantic neon #2 — attention / commitments */
+  --amber-90:#3a2606; --amber-70:#5c3c08; --amber-50:#a3690f;
+  --amber-30:#FFB029; --amber-20:#ffc866; --amber-10:#ffe4ad;
 
-  --surface-page:var(--neutral-100);
-  --surface-card:var(--neutral-80);
-  --surface-sunken:var(--neutral-60);
-  --surface-raised:var(--neutral-70);
-  --surface-veil:color-mix(in srgb, var(--neutral-100) 70%, transparent);
-  --surface-overlay-backdrop:color-mix(in srgb, var(--neutral-100) 55%, transparent);
-
-  --text-primary:var(--neutral-05);
-  --text-secondary:var(--neutral-30);
-  --text-muted:var(--neutral-40);
-  --text-danger:var(--danger);
-  --text-on-accent:var(--neutral-100);
-
-  --border-hairline:color-mix(in srgb, var(--neutral-05) 10%, transparent);
-  --border-strong:color-mix(in srgb, var(--neutral-05) 20%, transparent);
-  --border-danger:color-mix(in srgb, var(--danger) 40%, transparent);
-
-  --accent-primary:var(--primary-30);
-  --accent-primary-bg:var(--primary-90);
-  --accent-primary-soft:var(--primary-30);
-  --accent-attention:var(--amber);
-  --accent-attention-bg:var(--amber-soft);
-  --bg-danger:var(--danger-soft);
-
-  /* legacy aliases — drop once ActivityStrip/MemoryPanel are touched in Phase 2 */
-  --accent-memory:var(--accent-primary);
-  --accent-memory-bg:var(--accent-primary-bg);
-  --accent-search:var(--primary-20);
-  --accent-search-bg:var(--primary-90);
-  --accent-skill:var(--neutral-30);
+  /* semantic neon #3 — danger / conflicts (hue shifted from old amber-adjacent red to hot pink-red, for separation) */
+  --danger-90:#3d0611; --danger-70:#63091b; --danger-50:#b31530;
+  --danger-30:#FF294D; --danger-20:#ff6f89; --danger-10:#ffc2cf;
 
   --font-voice:'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-display:'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
@@ -53,7 +27,7 @@
 
   --space-1:4px; --space-2:8px; --space-3:12px;
   --space-4:16px; --space-5:24px; --space-6:32px;
-  --radius-sm:4px; --radius-md:8px; --radius-lg:12px;
+  --radius-sm:8px; --radius-md:10px; --radius-lg:12px; --radius-full:999px;
   --rail-width:150px;
   --panel-width:380px;
 

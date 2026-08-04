@@ -1,10 +1,12 @@
 <script>
+  import { startChatDrag, endChatDrag } from '../stores/workspace.svelte.ts';
+  
   let { conversations, activeId, onNew, onSelect, onDelete, onToggle } = $props();
 </script>
 
 <aside class="sidebar">
   <div class="brand-row">
-    <div class="brand">loki</div>
+    <div class="brand">Loki /.</div>
     <button class="icon-btn" onclick={onToggle} title="Close sidebar" aria-label="Close sidebar">
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
@@ -21,7 +23,13 @@
     {:else}
       {#each conversations as c}
         <div class="row" class:active={c.conversation_id === activeId}>
-          <button class="conv" onclick={() => onSelect(c.conversation_id)}>
+          <button
+            class="conv"
+            draggable="true"
+            ondragstart={(e) => { e.dataTransfer.setData('text/plain', c.conversation_id); e.dataTransfer.effectAllowed = 'copy'; startChatDrag(c.conversation_id); }}
+            ondragend={endChatDrag}
+            onclick={() => onSelect(c.conversation_id)}
+          >
             {c.label}
           </button>
           <button
@@ -76,22 +84,16 @@
     justify-content: center;
     width: 2rem;
     height: 2rem;
-    padding: 0; /* Remove padding to let flexbox center the strict SVG size */
+    padding: 0;
     background: none;
-    border: none; /* In App.svelte, keep your border if you want the boxed look */
+    border: none;
     color: var(--text-secondary);
     border-radius: var(--radius-sm);
     cursor: pointer;
   }
   
-  .icon-btn svg {
-    width: 1.25rem;
-    height: 1.25rem;
-    flex-shrink: 0;
-  }
-  
   .icon-btn:hover {
-    background: var(--surface-sunken); /* Background hover for sidebar */
+    background: var(--surface-sunken);
     color: var(--text-primary);
   }
 
@@ -142,7 +144,7 @@
     color: var(--text-secondary);
     background: none;
     border: none;
-    cursor: pointer;
+    cursor: grab;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

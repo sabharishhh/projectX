@@ -1,5 +1,5 @@
 <script>
-  let { kind = 'primary', size = 'default', disabled = false, icon = null, iconDescription = '', type = 'button', onclick = () => {}, children } = $props();
+  let { kind = 'primary', size = 'default', disabled = false, icon = null, iconDescription = '', type = 'button', onclick = () => {}, children, ...rest } = $props();
   const iconOnly = $derived(!!icon && !children);
 </script>
 
@@ -11,6 +11,7 @@
   title={iconOnly ? iconDescription : undefined}
   aria-label={iconOnly ? iconDescription : undefined}
   onclick={(e) => !disabled && onclick(e)}
+  {...rest}
 >
   {#if icon}
     {@const Icon = icon}
@@ -47,8 +48,12 @@
   .kind-ghost { background: transparent; color: var(--text-secondary); }
   .kind-ghost:hover:not(:disabled) { background: var(--surface-sunken); color: var(--text-primary); }
 
-  .kind-danger { background: var(--danger); color: var(--neutral-05); }
-  .kind-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 80%, black); }
+  .kind-danger { background: var(--accent-danger); color: var(--text-on-accent); }
+  .kind-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-danger) 80%, black); }
 
   .label { line-height: 1; }
+  
+  .icon-only.kind-primary {
+    border-radius: 50%;
+  }
 </style>

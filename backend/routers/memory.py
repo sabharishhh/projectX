@@ -2,9 +2,9 @@ from fastapi import APIRouter
 
 import db
 import ledger
-from capture import supersede_unit, commit_unit, forget_unit, purge_unit
-from models import ResolveRequest, ForgetResolveRequest, DirectDeleteRequest, DirectEditRequest, ManualCommitRequest
-from state import PENDING, PENDING_FORGETS
+from capture import supersede_unit, commit_unit, forget_unit, purge_unit, confirm_commitment_resolution
+from models import ResolveRequest, ForgetResolveRequest, DirectDeleteRequest, DirectEditRequest, ManualCommitRequest, CommitmentResolutionRequest
+from state import PENDING, PENDING_FORGETS, PENDING_COMMITMENT_RESOLUTIONS
 
 router = APIRouter()
 
@@ -100,4 +100,18 @@ def create_commitment(req: ManualCommitRequest):
     ok = commit_unit(unit, "memory-panel", req.branch)
     if ok:
         ledger.log("memory_commit", f"manually created: {req.content}", "memory-panel", actor="user")
+    return {"ok": ok}
+
+@router.post("/api/memory/resolve_commitment")
+def resolve_commitment_confirmation(req: CommitmentResolutionRequest):
+    p = PENDING_COMMITMENT_RESOLUTIONS.pop(req.resolution_id, None)
+    if not p:
+        return {"ok": False, "reason": "already resolved or expired"}
+
+    ok = confirm_commitment_resolution(p, req.choice)
+    if ok:
+        if req.choice == "confirm":
+            ledger.log("commitment_resolved", f"{p['status']}: {p['unit']['content']}", p["source"], actor="user")
+        else:
+            ledger.log("commitment_resolution_declined", f"kept open: {p['unit']['content']}", p["source"], actor="user")
     return {"ok": ok}

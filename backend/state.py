@@ -50,3 +50,4 @@ class PersistentPendingDict(dict):
 # user acting on it no longer silently discards it
 PENDING = PersistentPendingDict("conflict")
 PENDING_FORGETS = PersistentPendingDict("forget")
+PENDING_COMMITMENT_RESOLUTIONS = PersistentPendingDict("commitment_resolution")

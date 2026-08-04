@@ -5,8 +5,25 @@ from datetime import datetime, timezone
 DB_PATH = "loki.db"
 
 
+def _connect() -> sqlite3.Connection:
+    """Every write path in this module opens its own short-lived
+    connection rather than sharing one — safe across threads since each
+    connection never leaves the thread that created it, but under
+    concurrent writes (multiple chat panes hitting SQLite at once)
+    SQLite's default busy_timeout of 0ms means a lock conflict raises
+    immediately instead of waiting, and that exception was unhandled in
+    several call sites, crashing the request. WAL mode lets reads and
+    writes coexist without blocking each other in the common case; the
+    busy_timeout is the backstop for the remaining write-vs-write case,
+    so a transient lock waits up to 10s instead of failing instantly."""
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    return conn
+
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +60,7 @@ def init_db():
 
 
 def load_messages(conversation_id: str) -> list[dict]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     rows = conn.execute(
         "SELECT role, content, activity FROM messages WHERE conversation_id = ? ORDER BY id ASC",
         (conversation_id,),
@@ -64,7 +81,7 @@ def to_provider_messages(msgs: list[dict]) -> list[dict]:
 
 
 def save_message(conversation_id: str, role: str, content: str, activity: list | None = None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         "INSERT INTO messages (conversation_id, role, content, activity, created_at) VALUES (?, ?, ?, ?, ?)",
         (conversation_id, role, content, json.dumps(activity) if activity else None,
@@ -75,14 +92,14 @@ def save_message(conversation_id: str, role: str, content: str, activity: list |
 
 
 def clear_messages(conversation_id: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
     conn.commit()
     conn.close()
 
 
 def list_conversations() -> list[dict]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     rows = conn.execute("""
         SELECT conversation_id,
                MIN(created_at) as started,
@@ -102,7 +119,7 @@ def list_conversations() -> list[dict]:
     ]
 
 def _ensure_pending_table():
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS pending_state (
             kind TEXT NOT NULL,
@@ -121,7 +138,7 @@ def load_pending(kind: str) -> dict[str, dict]:
     keyed by id — used once at startup to rehydrate PENDING/PENDING_FORGETS
     after a restart."""
     _ensure_pending_table()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     rows = conn.execute("SELECT id, payload FROM pending_state WHERE kind = ?", (kind,)).fetchall()
     conn.close()
     return {id_: json.loads(payload) for id_, payload in rows}
@@ -129,7 +146,7 @@ def load_pending(kind: str) -> dict[str, dict]:
 
 def save_pending(kind: str, id_: str, payload: dict):
     _ensure_pending_table()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         "INSERT OR REPLACE INTO pending_state (kind, id, payload, created_at) VALUES (?, ?, ?, datetime('now'))",
         (kind, id_, json.dumps(payload)),
@@ -140,7 +157,7 @@ def save_pending(kind: str, id_: str, payload: dict):
 
 def delete_pending(kind: str, id_: str):
     _ensure_pending_table()
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute("DELETE FROM pending_state WHERE kind = ? AND id = ?", (kind, id_))
     conn.commit()
     conn.close()
@@ -149,7 +166,7 @@ def mark_conflict_status(conversation_id: str, conflict_id: str, resolution: str
     """Find the message that raised this conflict and record how it was
     resolved, so a reload reflects the true state instead of re-showing it
     as pending. Returns True if a matching event was found and patched."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     rows = conn.execute(
         "SELECT id, activity FROM messages WHERE conversation_id = ? AND activity IS NOT NULL",
         (conversation_id,),
@@ -175,7 +192,7 @@ def mark_conflict_status(conversation_id: str, conflict_id: str, resolution: str
 def mark_forget_status(conversation_id: str, forget_id: str, resolution: str) -> bool:
     """Same persistence pattern as mark_conflict_status — writes the
     resolution onto the stored message's activity so it survives reload."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     rows = conn.execute(
         "SELECT id, activity FROM messages WHERE conversation_id = ? AND activity IS NOT NULL",
         (conversation_id,),
@@ -194,7 +211,7 @@ def mark_forget_status(conversation_id: str, forget_id: str, resolution: str) ->
     return True
 
 def get_summary(conversation_id: str) -> dict | None:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     row = conn.execute(
         "SELECT summary, summarized_through FROM conversation_summaries WHERE conversation_id = ?",
         (conversation_id,),
@@ -205,7 +222,7 @@ def get_summary(conversation_id: str) -> dict | None:
     return {"summary": row[0], "summarized_through": row[1]}
 
 def save_summary(conversation_id: str, summary: str, summarized_through: int):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         """INSERT INTO conversation_summaries (conversation_id, summary, summarized_through)
            VALUES (?, ?, ?)
@@ -216,16 +233,11 @@ def save_summary(conversation_id: str, summary: str, summarized_through: int):
     conn.close()
 
 def save_retrieval_trace(conversation_id: str, message: str, trace: dict, keep_last: int = 20):
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     conn.execute(
         "INSERT INTO retrieval_traces (conversation_id, message, trace, created_at) VALUES (?, ?, ?, ?)",
         (conversation_id, message, json.dumps(trace), datetime.now(timezone.utc).isoformat()),
     )
-    # Pure debug/introspection data — nothing in the app depends on old
-    # entries surviving, so bounding per-conversation prevents unbounded
-    # growth with no new scheduler/cron infrastructure needed. keep_last
-    # matches get_retrieval_traces' existing default limit=20 — the read
-    # side never asks for more than that anyway.
     conn.execute(
         """DELETE FROM retrieval_traces
            WHERE conversation_id = ? AND id NOT IN (
@@ -240,7 +252,7 @@ def save_retrieval_trace(conversation_id: str, message: str, trace: dict, keep_l
 
 
 def get_retrieval_traces(conversation_id: str, limit: int = 20) -> list[dict]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     rows = conn.execute(
         "SELECT message, trace, created_at FROM retrieval_traces "
         "WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",

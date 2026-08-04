@@ -2,7 +2,8 @@
   import Collapsible from './Collapsible.svelte';
   import { reveal } from '$lib/motion.js';
 
-  let { act } = $props();
+  let { act, chatId } = $props();
+  import { openMemoryPanelForChat } from '../stores/workspace.svelte.ts';
 
   const KINDS = {
     memory_read:       { icon:'ti-notebook',      accent:'var(--accent-primary)' },
@@ -27,7 +28,11 @@
 
   <div class="trace-content">
     {#if act.units?.length}
-      <Collapsible label={act.label} count={act.units.length} accent={m.accent}>
+      <Collapsible
+        label={act.label} count={act.units.length} accent={m.accent}
+        actionIcon="ti-arrow-up-right" actionLabel="View in memory panel"
+        onAction={() => openMemoryPanelForChat(chatId)}
+      >
         <ul class="units">
           {#each act.units as u}
             <li in:reveal>

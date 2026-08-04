@@ -11,6 +11,9 @@ class ResolveRequest(BaseModel):
     choice: str  # "update" | "keep_both" | "keep_old"
     conversation_id: str
 
+class CommitmentResolutionRequest(BaseModel):
+    resolution_id: str
+    choice: str  # "confirm" | "deny"
 
 class ForgetResolveRequest(BaseModel):
     forget_id: str

@@ -1,7 +1,8 @@
 <script>
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import Close from 'carbon-icons-svelte/lib/Close.svelte';
+  import Close from './icons/IconClose.svelte';
+  import TrashCan from './icons/IconTrash.svelte';
   import Button from './ui/Button.svelte';
   import Tabs from './ui/Tabs.svelte';
   import TabPanel from './ui/TabPanel.svelte';
@@ -12,6 +13,7 @@
   let {
     open = false, memory = [], history = [], messages = [],
     onClose = () => {}, onopensource = () => {}, ondelete = () => {}, onedit = () => {}, oncreate = () => {},
+    onClearMemory = () => {},
   } = $props();
 
   let selectedTab = $state(0);
@@ -29,7 +31,10 @@
   <aside class="drawer" transition:fly={{ x: 40, duration: 280, easing: cubicOut }} aria-label="Memory, timeline and sources panel">
     <header class="drawer-header">
       <h2>{TAB_TITLES[selectedTab]}</h2>
-      <Button kind="ghost" size="small" icon={Close} iconDescription="Close" onclick={onClose} />
+      <div class="header-actions">
+        <Button kind="ghost" size="small" icon={TrashCan} iconDescription="Clear memory" onclick={onClearMemory} />
+        <Button kind="ghost" size="small" icon={Close} iconDescription="Close" onclick={onClose} />
+      </div>
     </header>
 
     <Tabs labels={TAB_TITLES} bind:selected={selectedTab}>
@@ -54,4 +59,5 @@
     padding: 0.9rem 1.5rem; border-bottom: 0.5px solid var(--border-hairline); flex-shrink: 0;
   }
   .drawer-header h2 { margin: 0; font-family: var(--font-display); font-size: var(--size-title); font-weight: var(--weight-semibold); color: var(--text-primary); }
+  .header-actions { display: flex; align-items: center; gap: 0.3rem; }
 </style>

@@ -3,6 +3,7 @@ from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 
 import ledger
+import logging
 import chatlog
 import branching
 import threading
@@ -11,34 +12,53 @@ import time_travel
 import summarization
 import agentic_search
 import skills as skill_registry
+from pipeline import Stage, Pipeline
 
 import search_decision as search_decision_module
 from capture import (
     extract_units, commit_unit, is_semantic_duplicate, find_open_commitments,
-    find_due_commitments, detect_commitment_resolutions, resolve_commitment,
+    find_due_commitments, detect_commitment_resolutions,
     check_correction_compliance, fetch_known_entities,
 )
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message, fetch_state_at_time
 from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
-from state import provider, model, PENDING, PENDING_FORGETS, MAIN_REASONING_EFFORT
+from state import provider, model, PENDING, PENDING_FORGETS, PENDING_COMMITMENT_RESOLUTIONS, MAIN_REASONING_EFFORT
+
+
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+logger = logging.getLogger("chat_engine")
 
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
-
-def _run_summarization(provider, conversation_id: str, history: list[dict], message: str, full_response: str):
+def _stage_summarize(ctx: dict):
     """Runs after the SSE stream has already closed — summarization has no
-    live activity card, so deferring it changes nothing the user sees,
-    only removes its LLM call (on the turns it actually fires) from the
-    critical path the user waits through."""
-    try:
-        summarization.maybe_update_summary(
-            provider, conversation_id,
-            history + [{"role": "user", "content": message}, {"role": "assistant", "content": full_response}],
-        )
-    except Exception as e:
-        chatlog.logger.warning(f"background summarization failed: {e!r}") if hasattr(chatlog, "logger") else None
+    live activity card, so nothing the user sees depends on this
+    finishing before the stream ends. Only fires on turns where enough
+    messages have aged past the visible window (TRIGGER_BUFFER), so this
+    is a no-op most turns; on the turns it does fire, running it as a
+    background stage removes a full extra LLM call from the user's wait
+    time. on_fail='open' — a failed summary update just means the next
+    trigger point re-attempts it; it's not a correctness issue like a
+    dropped memory write would be."""
+    summarization.maybe_update_summary(
+        provider, ctx["conversation_id"],
+        ctx["history"] + [
+            {"role": "user", "content": ctx["message"]},
+            {"role": "assistant", "content": ctx["full_response"]},
+        ],
+    )
+
+
+# Reused across every stream_chat call — a single long-lived pipeline for
+# post-response background work, not one created per turn. This also means
+# post_response._background naturally tracks every summarization job
+# currently in flight across the whole app, which a bare
+# threading.Thread(daemon=True) per call had no way to expose.
+post_response = Pipeline([
+    Stage("summarize", deps=[], mode="background", on_fail="open", fn=_stage_summarize),
+])
 
 
 # --- Phase: classification ---
@@ -364,10 +384,10 @@ def _generate_reply_gated(conversation_id: str, conversation: list[dict], skill:
     return corrected, False
 
 # --- Phase: capture (facts + conflicts) ---
-
 def _process_capture(conversation_id: str, message: str, full_response: str,
                       known: list[dict], allowed_branches: list[str],
-                      forget_matches: list[dict], activity_log: list[dict]):
+                      forget_matches: list[dict], activity_log: list[dict],
+                      disconnected=None):
     """Forget requests are detected BEFORE this runs, not after — capture
     can't honor its own "don't create a unit describing a forget request"
     rule if it runs first without knowing this message is one. Skipping
@@ -381,27 +401,62 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
     New commitments are captured here through the same path as any other
     fact — extract_units/commit_unit already carry deadline/
     commitment_status through unchanged, nothing commitment-specific
-    needed in this function itself."""
+    needed in this function itself.
+
+    disconnected, if given, is checked before each individual write in
+    the loop below — not just once before the phase starts — so a client
+    that leaves partway through a multi-unit capture stops the remaining
+    writes instead of committing all of them regardless."""
+
+    def _is_live_duplicate(k: dict, content: str) -> bool:
+        if k["content"] != content:
+            return False
+        if k.get("unit_type") == "commitment" and k.get("commitment_status") not in (None, "open"):
+            return False
+        return True
+
     known_entities = [] if forget_matches else fetch_known_entities()
     units = [] if forget_matches else extract_units(provider, message, full_response, known, allowed_branches, known_entities)
     added, conflicts = [], []
 
+    # Duplicate-checking is read-only (/retrieve) and each candidate's
+    # check is independent — only candidates that survive the cheap
+    # verbatim check AND aren't an explicit supersede even need it, so
+    # only those run, concurrently. The write loop below stays strictly
+    # sequential: concurrent writes to the git-versioned memory store
+    # haven't been evaluated for commit-ordering safety, so this is a
+    # deliberate boundary, not an oversight.
+    needs_dup_check = [
+        i for i, u in enumerate(units)
+        if not any(_is_live_duplicate(k, u["content"]) for k in known) and not u.get("supersedes")
+    ]
+    dup_results = {}
+    if needs_dup_check:
+        with ThreadPoolExecutor(max_workers=len(needs_dup_check)) as pool:
+            futures = {i: pool.submit(is_semantic_duplicate, units[i], units[i].get("branch", "main")) for i in needs_dup_check}
+            for i in needs_dup_check:
+                try:
+                    dup_results[i] = futures[i].result()
+                except Exception as e:
+                    logger.warning(f"is_semantic_duplicate raised unexpectedly: {e!r} — treating as not-duplicate (fail open)")
+                    dup_results[i] = False
 
-    for u in units:
-        if any(k["content"] == u["content"] for k in known):
+    for i, u in enumerate(units):
+        if disconnected is not None and disconnected.is_set():
+            logger.info(f"[{conversation_id}] disconnected mid-capture — "
+                        f"stopping before further writes ({i}/{len(units)} units processed)")
+            break
+
+        if any(_is_live_duplicate(k, u["content"]) for k in known):
             activity_log.append({"kind": "duplicate_skipped", "content": u["content"]})
-            continue  # verbatim duplicate of something already known — not a
-                    # conflict (nothing changed) and not a new fact (already
-                    # have it) — no-op either way
+            continue
 
         short = u.get("supersedes")
         branch = u.get("branch", "main")
 
-        if not short and is_semantic_duplicate(u, branch):
+        if not short and dup_results.get(i, False):
             activity_log.append({"kind": "duplicate_skipped", "content": u["content"]})
-            continue  # fuzzy backstop — catches rephrasings CAPTURE_PROMPT's own
-                    # judgment missed; explicit supersedes always bypasses this,
-                    # since that's a deliberate replacement, not a duplicate
+            continue
 
         target = next((k for k in known if k["hash"].startswith(short)), None) if short else None
 
@@ -411,7 +466,7 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
                 "from": target["hash"],
                 "unit": u,
                 "source": conversation_id,
-                "branch": target["branch"],  # supersede lands on the target's own branch
+                "branch": target["branch"],
             }
             conflicts.append({"id": cid, "old": target, "new": u})
             ledger.log("conflict_raised",
@@ -442,7 +497,6 @@ def _process_capture(conversation_id: str, message: str, full_response: str,
         yield _sse({"type": "activity", "event": ev})
 
     return conflicts
-
 
 # --- Phase: forget-request surfacing ---
 
@@ -479,12 +533,14 @@ def _process_forgets(conversation_id: str, forget_matches: list[dict],
 
 def _process_commitment_resolutions(conversation_id: str, message: str, full_response: str,
                                      allowed_branches: list[str], activity_log: list[dict]):
-    """Deterministic candidate-gathering (every currently-open commitment
-    across allowed branches, regardless of deadline) followed by one
-    bounded LLM judgment over that pre-narrowed set — mirrors the
-    forget-pipeline's pattern-then-confirm shape exactly. Skips the LLM
-    call entirely, at zero cost, when there's nothing open to resolve.
-    Yields commitment_resolved activity events, mutates activity_log."""
+    """Deterministic candidate-gathering, then one bounded LLM judgment
+    over that pre-narrowed set — unchanged. What changed: a proposed
+    resolution is no longer applied immediately. It's staged in
+    PENDING_COMMITMENT_RESOLUTIONS and surfaced as a confirmation card,
+    the same pattern conflicts (PENDING) and forgets (PENDING_FORGETS)
+    already use. Nothing here writes to the memory store — that only
+    happens once the user explicitly confirms, via whatever endpoint
+    calls confirm_commitment_resolution in capture.py."""
     open_commitments = []
     for b in allowed_branches:
         open_commitments.extend({**u, "branch": b} for u in find_open_commitments(b))
@@ -495,76 +551,90 @@ def _process_commitment_resolutions(conversation_id: str, message: str, full_res
     resolutions = detect_commitment_resolutions(provider, message, full_response, open_commitments)
     for r in resolutions:
         branch = r["unit"].get("branch", "main")
-        if resolve_commitment(r, conversation_id, branch):
-            ev = {
-                "kind": "commitment_resolved",
-                "label": f"{r['status'].capitalize()}: {r['unit']['content']}",
-                "content": r["unit"]["content"],
-                "status": r["status"],
-            }
-            activity_log.append(ev)
-            yield _sse({"type": "activity", "event": ev})
-            ledger.log("commitment_resolved", f"{r['status']}: {r['unit']['content']}",
-                       conversation_id, actor="system")
-
+        rid = uuid4().hex[:12]
+        PENDING_COMMITMENT_RESOLUTIONS[rid] = {
+            "unit": r["unit"],
+            "status": r["status"],
+            "source": conversation_id,
+            "branch": branch,
+        }
+        ev = {
+            "kind": "commitment_resolution_request",
+            "label": f"Mark {r['status']}: {r['unit']['content']}",
+            "id": rid,
+            "content": r["unit"]["content"],
+            "status": r["status"],
+        }
+        activity_log.append(ev)
+        yield _sse({"type": "activity", "event": ev})
+        ledger.log("commitment_resolution_proposed", f"{r['status']}: {r['unit']['content']}",
+                   conversation_id, actor="system")
 
 # --- Orchestration ---
-
-def stream_chat(conversation_id: str, message: str):
+def stream_chat(conversation_id: str, message: str, disconnected: threading.Event | None = None):
     """Generator yielding SSE-formatted strings for one chat turn: memory
     injection, skill selection, optional search, the streamed reply, then
     capture (facts, conflicts, forget requests, commitment resolutions).
-    Each phase above is a focused function; this orchestrator sequences
-    them and owns the state that carries between phases."""
+
+    The intake phase (everything before the reply starts generating) now
+    runs through a declared Pipeline instead of hand-nested
+    ThreadPoolExecutor blocks — same two waves as before (classify/
+    time-travel/branch-gather, then forget-detection/retrieval), same
+    concurrency, same dependency structure, just expressed as `deps`
+    instead of literal code nesting. Everything from _build_conversation
+    onward is unchanged from before this migration."""
     history = load_messages(conversation_id)
     save_message(conversation_id, "user", message)
 
-    # Wave 1: skill/search-decision, time-travel detection, and the
-    # branch+known+commitments chain all depend only on `message` (the
-    # first two) or on branch state (the third) — none depend on each
-    # other's output, so they run concurrently. Previously this was a
-    # strictly linear chain (classify -> time-travel -> known -> forget
-    # -> retrieval), costing 3 sequential LLM round-trips before the
-    # main reply could even begin streaming. This is the direct fix for
-    # that time-to-first-token cost.
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        classify_future = pool.submit(_classify, message)
-        time_travel_future = pool.submit(time_travel.detect_time_travel_query, provider, message)
-        branches_future = pool.submit(_gather_branches_known_commitments)
+    def _stage_classify(ctx):
+        return _classify(ctx["message"])
 
-        skill, search_decision = classify_future.result()
-        time_travel_target = time_travel_future.result()
-        allowed_branches, known, due_commitments = branches_future.result()
+    def _stage_time_travel(ctx):
+        return time_travel.detect_time_travel_query(provider, ctx["message"])
 
+    def _stage_branches(ctx):
+        return _gather_branches_known_commitments()
+
+    def _stage_forget(ctx):
+        allowed_branches, known, _ = ctx["branches_known_commitments"]
+        return forgetting.detect_forget_request(provider, ctx["message"], known, allowed_branches)
+
+    def _stage_retrieval_normal(ctx):
+        skill, _ = ctx["classify"]
+        allowed_branches, _, _ = ctx["branches_known_commitments"]
+        return _fetch_relevant(ctx["message"], skill, allowed_branches)
+
+    def _stage_retrieval_time_travel(ctx):
+        allowed_branches, _, _ = ctx["branches_known_commitments"]
+        return [fetch_state_at_time(b, ctx["time_travel"]) for b in allowed_branches]
+
+    intake = Pipeline([
+        Stage("classify", deps=[], fn=_stage_classify),
+        Stage("time_travel", deps=[], fn=_stage_time_travel),
+        Stage("branches_known_commitments", deps=[], fn=_stage_branches),
+        Stage("forget_detect", deps=["branches_known_commitments"], fn=_stage_forget),
+        Stage("retrieval_normal", deps=["classify", "branches_known_commitments"],
+              gate=lambda ctx: not ctx["time_travel"], fn=_stage_retrieval_normal),
+        Stage("retrieval_time_travel", deps=["time_travel", "branches_known_commitments"],
+              gate=lambda ctx: bool(ctx["time_travel"]), fn=_stage_retrieval_time_travel),
+    ])
+
+    context = intake.run({"message": message}, disconnected=disconnected)
+
+    skill, search_decision = context["classify"]
+    time_travel_target = context["time_travel"]
+    allowed_branches, known, due_commitments = context["branches_known_commitments"]
+    forget_matches = context["forget_detect"] or []
     active_corrections = [u for u in known if u.get("unit_type") == "correction"]
 
-    # Wave 2: forget-detection genuinely needs `known` (just produced
-    # above), and retrieval (relevant-fact or time-travel) genuinely
-    # needs `skill`/`allowed_branches` (also ready) — but neither
-    # depends on the other, so they run concurrently instead of
-    # forget-detection blocking retrieval the way it did before.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        forget_future = pool.submit(forgetting.detect_forget_request, provider, message, known, allowed_branches)
-
-        if time_travel_target:
-            retrieval_future = pool.submit(
-                lambda: [fetch_state_at_time(b, time_travel_target) for b in allowed_branches]
-            )
-        else:
-            retrieval_future = pool.submit(_fetch_relevant, message, skill, allowed_branches)
-
-        forget_matches = forget_future.result()
-        retrieval_result = retrieval_future.result()
-
     if time_travel_target:
-        tt_results = retrieval_result
+        tt_results = context["retrieval_time_travel"]
         tt_units = [u for r in tt_results for u in r["units"]]
         resolved_dates = [r["resolved_at"] for r in tt_results if r["resolved_at"]]
         injected = tt_units[:12]
-        per_branch_debug = {}  # historical path doesn't populate the normal retrieval trace
+        per_branch_debug = {}
     else:
-        injected, per_branch_debug = retrieval_result
-    
+        injected, per_branch_debug = context["retrieval_normal"]
 
     save_retrieval_trace(conversation_id, message, {
         "allowed_branches": allowed_branches,
@@ -627,8 +697,15 @@ def stream_chat(conversation_id: str, message: str):
     if errored:
         return
 
+    save_message(conversation_id, "assistant", full_response, activity_log)
+
+    if disconnected is not None and disconnected.is_set():
+        logger.info(f"[{conversation_id}] client disconnected — skipping capture/forget/resolution, no orphaned writes")
+        return
+
     conflicts = yield from _process_capture(
         conversation_id, message, full_response, known, allowed_branches, forget_matches, activity_log,
+        disconnected,
     )
     yield from _process_forgets(conversation_id, forget_matches, conflicts, activity_log)
     yield from _process_commitment_resolutions(
@@ -641,17 +718,14 @@ def stream_chat(conversation_id: str, message: str):
     chatlog.log_turn(conversation_id, message, skill, injected, activity_log, full_response)
     yield _sse({"type": "done"})
 
-    # Deferred until after "done" — summarization has no live activity card
-    # (maybe_update_summary never yields one), so nothing the user sees
-    # depends on this finishing before the stream closes. It only fires on
-    # turns where enough messages have aged past the visible window
-    # (TRIGGER_BUFFER), so this is a no-op most turns; on the turns it does
-    # fire, this removes a full extra LLM call from the user's wait time.
-    # Fire-and-forget from a plain sync generator (no asyncio.create_task
-    # available here) — a daemon thread, since the request/response cycle
-    # is already fully done by this point and nothing needs to join it.
-    threading.Thread(
-        target=_run_summarization,
-        args=(provider, conversation_id, history, message, full_response),
-        daemon=True,
-    ).start()
+    # Fire-and-forget, but no longer a bare daemon thread with no failure
+    # visibility — post_response.run() submits into the shared executor
+    # and returns immediately (background stages don't block the caller);
+    # a failure is logged by Pipeline._on_background_done, not silently
+    # swallowed past a single warning line at the call site.
+    post_response.run({
+        "conversation_id": conversation_id,
+        "history": history,
+        "message": message,
+        "full_response": full_response,
+    })

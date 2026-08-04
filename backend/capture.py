@@ -2,6 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 from state import CAPTURE_MODEL
 from memory_client import client
@@ -352,6 +353,8 @@ def is_semantic_duplicate(u: dict, branch: str) -> bool:
         if not results:
             return False
         top = results[0]
+        if top.get("unit_type") == "commitment" and top.get("commitment_status") not in (None, "open"):
+            return False
         return (
             top.get("unit_type") == u["unit_type"]
             and top.get("score", 0.0) >= DUPLICATE_SIMILARITY_THRESHOLD
@@ -423,8 +426,12 @@ def _verify_unit(provider, user_message: str, assistant_message: str, unit: dict
 
 def extract_units(provider, user_message: str, assistant_message: str,
                   known: list[dict], branches: list[str], known_entities: list[dict]) -> list[dict]:
+    known_for_prompt = [
+        k for k in known
+        if not (k.get("unit_type") == "commitment" and k.get("commitment_status") not in (None, "open"))
+    ]
     prompt = CAPTURE_PROMPT.format(
-        known=_known_facts_block(known),
+        known=_known_facts_block(known_for_prompt),
         branches=", ".join(branches),
         known_entities=_known_entities_block(known_entities),
         entity_types=", ".join(ENTITY_TYPES),
@@ -471,11 +478,19 @@ def extract_units(provider, user_message: str, assistant_message: str,
     # returned at all — chat_engine.py's caller sees only what passed,
     # no change needed on that side.
     verified = []
-    for u in units:
-        if _verify_unit(provider, user_message, assistant_message, u):
-            verified.append(u)
-        else:
-            logger.info(f"capture rejected at verify stage: {u['content']!r}")
+    if units:
+        with ThreadPoolExecutor(max_workers=len(units)) as pool:
+            futures = [pool.submit(_verify_unit, provider, user_message, assistant_message, u) for u in units]
+            for u, future in zip(units, futures):
+                try:
+                    ok = future.result()
+                except Exception as e:
+                    logger.warning(f"capture verify raised unexpectedly for {u.get('content', '')!r}: {e!r} — rejecting (fail closed)")
+                    ok = False
+                if ok:
+                    verified.append(u)
+                else:
+                    logger.info(f"capture rejected at verify stage: {u['content']!r}")
     return verified
 
 
@@ -669,6 +684,19 @@ def resolve_commitment(resolution: dict, source: str, branch: str) -> bool:
         "commitment_status": resolution["status"],
     }
     return supersede_unit(unit["hash"], updated, source, branch)
+
+def confirm_commitment_resolution(pending: dict, choice: str) -> bool:
+    """Applies a staged commitment resolution once the user has actually
+    confirmed it — the real write, previously fired automatically inside
+    the same turn that proposed it. choice='confirm' applies pending['status']
+    (done/cancelled); anything else is a no-op that just discards the
+    pending entry without touching memory."""
+    if choice != "confirm":
+        return True
+    return resolve_commitment(
+        {"unit": pending["unit"], "status": pending["status"]},
+        pending["source"], pending["branch"],
+    )
 
 
 def forget_unit(unit_hash: str, source: str, branch: str, summary: str) -> bool:

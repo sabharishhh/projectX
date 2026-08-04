@@ -1,15 +1,17 @@
 <script>
   import Button from './ui/Button.svelte';
   import Tag from './ui/Tag.svelte';
-  import Edit from 'carbon-icons-svelte/lib/Edit.svelte';
-  import TrashCan from 'carbon-icons-svelte/lib/TrashCan.svelte';
+  import IconEdit from './icons/IconEdit.svelte';
+  import IconTrash from './icons/IconTrash.svelte';
+  import IconMoreVertical from './icons/IconMoreVertical.svelte';
+  import IconFlag from './icons/IconFlag.svelte';
   import Collapsible from './Collapsible.svelte';
   import { reveal } from '../motion.js';
+  import { beginMemoryEdit } from '../stores/workspace.svelte.ts';
 
-  let { memory = [], onopensource = () => {}, ondelete = () => {}, onedit = () => {}, oncreate = () => {} } = $props();
+  let { memory = [], onopensource = () => {}, ondelete = () => {}, oncreate = () => {} } = $props();
 
-  let editingHash = $state(null);
-  let editDraft = $state('');
+  let openMenuHash = $state(null);
   let showAddCommitment = $state(false);
   let newCommitmentText = $state('');
   let newCommitmentDeadline = $state('');
@@ -24,13 +26,20 @@
     })).filter((g) => g.items.length || g.type === 'commitment')
   );
 
-  function startEdit(u) { editingHash = u.hash; editDraft = u.content; }
-  function cancelEdit() { editingHash = null; editDraft = ''; }
-  function saveEdit(u) {
-    const trimmed = editDraft.trim();
-    if (trimmed && trimmed !== u.content) onedit(u, trimmed);
-    editingHash = null; editDraft = '';
+  function handleWindowClick(e) {
+    if (openMenuHash && !e.target.closest('.item-menu')) openMenuHash = null;
   }
+
+  function handleEdit(u) {
+    openMenuHash = null;
+    beginMemoryEdit(u);
+  }
+
+  function handleDelete(u) {
+    openMenuHash = null;
+    ondelete(u);
+  }
+
   function submitNewCommitment() {
     const trimmed = newCommitmentText.trim();
     if (!trimmed) return;
@@ -38,6 +47,8 @@
     newCommitmentText = ''; newCommitmentDeadline = ''; showAddCommitment = false;
   }
 </script>
+
+<svelte:window onclick={handleWindowClick} />
 
 <div class="memory-view">
   {#if grouped.length === 0}<p class="empty">Nothing remembered yet.</p>{/if}
@@ -48,28 +59,32 @@
         <ul>
           {#each group.items as u (u.hash)}
             <li in:reveal class:inferred={u.provenance === 'inferred'}>
-              {#if editingHash === u.hash}
-                <div class="edit-row">
-                  <textarea class="edit-input" bind:value={editDraft} rows="2"
-                    onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(u); } if (e.key === 'Escape') cancelEdit(); }}
-                  ></textarea>
-                  <div class="edit-actions">
-                    <Button size="small" kind="primary" onclick={() => saveEdit(u)}>Save</Button>
-                    <Button size="small" kind="ghost" onclick={cancelEdit}>Cancel</Button>
-                  </div>
-                </div>
-              {:else}
-                <span class="content {u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}">{u.content}</span>
-                <span class="item-actions">
-                  {#if u.deadline}
-                    <Tag type="warm-gray" size="sm">due {new Date(u.deadline).toLocaleDateString()}</Tag>
-                  {:else}
-                    <button class="source technical" title={u.source} onclick={() => onopensource(u.source)}>{u.hash.slice(0, 8)}</button>
+              <span class="content {u.provenance === 'inferred' ? 'provenance-inferred' : 'provenance-stated'}">{u.content}</span>
+              <span class="item-actions">
+                {#if u.deadline}
+                  <Tag type="warm-gray" size="sm">due {new Date(u.deadline).toLocaleDateString()}</Tag>
+                {:else}
+                  <button class="source technical" title={u.source} onclick={() => onopensource(u.source)}>{u.hash.slice(0, 8)}</button>
+                {/if}
+                <div class="item-menu">
+                  <button class="mini-btn" title="Options" aria-label="Options" onclick={() => (openMenuHash = openMenuHash === u.hash ? null : u.hash)}>
+                    <IconMoreVertical size={14} />
+                  </button>
+                  {#if openMenuHash === u.hash}
+                    <div class="item-menu-popover">
+                      <button class="menu-item" onclick={() => handleEdit(u)}>
+                        <IconEdit size={14} /> Edit
+                      </button>
+                      <button class="menu-item" onclick={() => handleDelete(u)}>
+                        <IconTrash size={14} /> Delete
+                      </button>
+                      <button class="menu-item disabled" disabled title="Coming soon">
+                        <IconFlag size={14} /> Mark not relevant
+                      </button>
+                    </div>
                   {/if}
-                  <button class="mini-btn" title="Edit" aria-label="Edit" onclick={() => startEdit(u)}><Edit size={14} /></button>
-                  <button class="mini-btn danger" title="Delete" aria-label="Delete" onclick={() => ondelete(u)}><TrashCan size={14} /></button>
-                </span>
-              {/if}
+                </div>
+              </span>
             </li>
           {/each}
         </ul>
@@ -110,9 +125,38 @@
   .source:hover { color: var(--accent-primary); }
   .mini-btn { display: inline-flex; border: 0; padding: 0.2rem; background: none; color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; }
   .mini-btn:hover { background: var(--surface-sunken); color: var(--text-primary); }
-  .mini-btn.danger:hover { color: var(--text-danger); background: var(--bg-danger); }
-  .edit-row { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-2); }
-  .edit-input { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--size-meta); padding: var(--space-2); border: 1px solid var(--accent-primary); border-radius: var(--radius-sm); background: var(--surface-page); color: var(--text-primary); resize: vertical; }
+
+  .item-menu { position: relative; }
+  .item-menu-popover {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 0.25rem;
+    background: var(--surface-card);
+    border: 0.5px solid var(--border-hairline);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    z-index: 10;
+    min-width: 160px;
+    overflow: hidden;
+  }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 0.82rem;
+    text-align: left;
+    cursor: pointer;
+  }
+  .menu-item:hover { background: var(--surface-sunken); }
+  .menu-item.disabled { color: var(--text-muted); cursor: default; }
+  .menu-item.disabled:hover { background: none; }
+
   .edit-actions { display: flex; gap: var(--space-2); }
   .empty { margin: 0; font-size: var(--size-meta); font-style: italic; color: var(--text-secondary); }
   .add-commitment { margin-top: var(--space-2); display: flex; flex-direction: column; gap: var(--space-2); }
