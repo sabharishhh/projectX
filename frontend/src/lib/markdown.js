@@ -16,6 +16,10 @@ function escapeAttr(s) {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 const citationExtension = {
   name: "citation",
   level: "inline",
@@ -39,8 +43,9 @@ const citationExtension = {
 
     const label = src.title ? `${src.title} — ` : "";
     const preview = escapeAttr((label + (src.preview || "")).slice(0, 240));
+    const url = escapeAttr(src.url || "");
 
-    return `<span class="citation" data-preview="${preview}"><a href="${src.url}" target="_blank" rel="noreferrer">${token.numStr}</a></span>`;
+    return `<span class="citation" data-preview="${preview}"><a href="${url}" target="_blank" rel="noreferrer">${token.numStr}</a></span>`;
   },
 };
 
@@ -52,7 +57,7 @@ marked.use({
     code({ text, lang }) {
       const validLanguage = hljs.getLanguage(lang) ? lang : "plaintext";
       const highlighted = hljs.highlight(text, { language: validLanguage }).value;
-      const label = (lang || "").trim().split(/\s+/)[0] || "text";
+      const label = escapeHtml((lang || "").trim().split(/\s+/)[0] || "text");
       return `<div class="code-block">
         <div class="code-block-header">
           <span class="code-lang">${label}</span>
