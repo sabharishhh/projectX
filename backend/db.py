@@ -293,9 +293,12 @@ def mark_forget_status(conversation_id: str, forget_id: str, resolution: str) ->
                 changed = True
         if changed:
             conn.execute("UPDATE messages SET activity = ? WHERE id = ?", (json.dumps(activity), row_id))
-    conn.commit()
+            conn.commit()
+            conn.close()
+            return True
+
     conn.close()
-    return True
+    return False
 
 def get_summary(conversation_id: str) -> dict | None:
     conn = _connect()
