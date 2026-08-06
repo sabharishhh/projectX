@@ -3,6 +3,7 @@ description = "Drafting, editing, or refining prose — essays, emails, posts, s
 
 tools = []
 boost_types = ["preference", "identity"]
+skip_identity = true
 
 system_prompt = """
 You are helping with writing. Match the user's voice rather than imposing a

@@ -18,11 +18,13 @@ class Provider(ABC):
     supports_tools: bool = False
     supports_structured_output: bool = False
 
-    def stream(self, messages: list[dict], model: str, reasoning_effort: str = "none") -> Iterator[str]:
-        return self._do_stream(self._with_time(messages), model, reasoning_effort)
+    def stream(self, messages, model, reasoning_effort: str = "none",
+               deadline_seconds: float | None = None) -> Iterator[str]:
+        return self._do_stream(self._with_time(messages), model, reasoning_effort, deadline_seconds)
 
     @abstractmethod
-    def _do_stream(self, messages: list[dict], model: str, reasoning_effort: str) -> Iterator[str]:
+    def _do_stream(self, messages: list[dict], model: str, reasoning_effort: str,
+                    deadline_seconds: float | None = None) -> Iterator[str]:
         ...
 
     def stream_with_tools(self, messages: list[dict], model: str, tools: list[dict], reasoning_effort: str = "none") -> Iterator[dict]:
@@ -36,18 +38,28 @@ class Provider(ABC):
     def _do_stream_with_tools(self, messages: list[dict], model: str, tools: list[dict], reasoning_effort: str) -> Iterator[dict]:
         raise NotImplementedError(f"{type(self).__name__} has no tool-calling support")
 
-    def complete_json(self, messages: list[dict], model: str, schema: dict, schema_name: str) -> dict:
-        """Only implemented by providers with real structured-output
-        support. Callers MUST check `provider.supports_structured_output`,
-        NOT hasattr(provider, "complete_json") — this method now exists on
-        every provider, it just raises when unsupported."""
+    def complete_json(self, messages: list[dict], model: str, schema: dict, schema_name: str,
+                       reasoning_effort: str = "none", deadline_seconds: float | None = None) -> dict:
         if not self.supports_structured_output:
             raise NotImplementedError(f"{type(self).__name__} has no structured-output support")
-        return self._do_complete_json(self._with_time(messages), model, schema, schema_name)
+        return self._do_complete_json(self._with_time(messages), model, schema, schema_name,
+                                       reasoning_effort, deadline_seconds)
 
-    def _do_complete_json(self, messages: list[dict], model: str, schema: dict, schema_name: str) -> dict:
+    def _do_complete_json(self, messages, model, schema, schema_name, reasoning_effort,
+                           deadline_seconds: float | None = None) -> dict:
         raise NotImplementedError(f"{type(self).__name__} has no structured-output support")
 
     @staticmethod
     def _with_time(messages: list[dict]) -> list[dict]:
-        return [{"role": "system", "content": current_time_context()}] + messages
+        """Time context must sit as late as possible, not early — caching
+        matches an unbroken prefix from token zero. Inserting the
+        timestamp right after the leading system message caps the
+        matchable prefix at that one message alone, since everything
+        after a volatile message can never match. Placing it immediately
+        before the final (user) turn instead keeps every leading system
+        message — identity, guidance, recalled facts, whatever else —
+        intact as one contiguous, cacheable block, with only the
+        timestamp and the new user message varying at the tail."""
+        if not messages:
+            return [{"role": "system", "content": current_time_context()}]
+        return messages[:-1] + [{"role": "system", "content": current_time_context()}, messages[-1]]

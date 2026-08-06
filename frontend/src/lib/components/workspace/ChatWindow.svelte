@@ -26,6 +26,8 @@
   import IconSpinner from '../icons/IconSpinner.svelte';
   import IconCheck from '../icons/IconCheck.svelte';
   import IconClose from '../icons/IconClose.svelte';
+  import ThinkingTrace from "../ThinkingTrace.svelte";
+  import MemoryWriteRow from "../MemoryWriteRow.svelte";
 
   import { API_BASE } from "../../config.ts";
 
@@ -72,6 +74,54 @@
       latestText = update.state.doc.toString();
     }
   });
+
+  function formatTimestamp(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+
+  async function copyMessage(text) {
+    await navigator.clipboard.writeText(text);
+  }
+
+  async function retryMessage(idx) {
+    if (session.streaming) return;
+    const userMsg = session.messages[idx - 1];
+    if (!userMsg || userMsg.role !== "user") return;
+    session.messages.splice(idx, 1);
+    await sendMessage(chatId, API_BASE, userMsg.content, {
+      onMemoryWrite: () => { loadMemory(); loadHistory(); },
+    });
+    await loadConversations();
+  }
+
+  function handleCitationPosition(e) {
+    const citation = e.target.closest(".citation");
+    if (!citation) return;
+    const rect = citation.getBoundingClientRect();
+    const TOOLTIP_ESTIMATED_HEIGHT = 160; // enough headroom for ~4-5 lines of preview text
+    if (rect.top < TOOLTIP_ESTIMATED_HEIGHT) {
+      citation.classList.add("flip-below");
+    } else {
+      citation.classList.remove("flip-below");
+    }
+  }
+
+  function splitActivity(activity) {
+    const context = [], consequence = [];
+    for (const act of activity ?? []) {
+      if (act.kind === "reasoning") context.push(act);
+      else (CONTEXT_KINDS.has(act.kind) ? context : consequence).push(act);
+    }
+    return { context, consequence };
+  }
+
+  const CONTEXT_KINDS = new Set([
+    "skill", "time_travel", "memory_read", "commitments_due", "correction_check",
+    "tool_step", "tool_group", "source", "search", "search_failed", "searching",
+  ]);
+
 
   const customMarkdownExtension = { props: [styleTags({ ListMark: listMarkTag, CodeMark: codeMarkTag })] };
   const nativeTextFeatures = EditorView.contentAttributes.of({
@@ -197,7 +247,7 @@
       if (act.kind === "tool_step") {
         const last = out[out.length - 1];
         if (last?.kind === "tool_group") last.steps.push(act.label);
-        else out.push({ kind: "tool_group", label: "Searching...", steps: [act.label] });
+        else out.push({ kind: "tool_group", label: "Search Results", steps: [act.label] });
       } else {
         out.push(act);
       }
@@ -248,35 +298,88 @@
   </div>
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="stream" bind:this={scroller} onclick={handleStreamClick} onkeydown={handleStreamKeydown}>
+  <!-- svelte-ignore a11y_mouse_events_have_key_events -->
+  <div class="stream" bind:this={scroller} onclick={handleStreamClick} onkeydown={handleStreamKeydown} onmouseover={handleCitationPosition} onfocuscapture={handleCitationPosition}>
     {#if session.messages.length === 0}
-      <p class="empty">Say something. What you reveal about yourself gets remembered.</p>
+      <p class="empty">Start anywhere. I'll remember the rest.</p>
     {/if}
 
     {#each session.messages as msg, idx}
       {#if msg.role === "user"}
-        <div class="turn user"><div class="said">{msg.content}</div></div>
+        <div class="turn user">
+          <div class="said">{msg.content}</div>
+          <div class="msg-actions user-actions">
+            <span class="msg-time">{formatTimestamp(msg.created_at)}</span>
+            <button class="msg-action-btn" onclick={() => copyMessage(msg.content)} title="Copy">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="8" y="8" width="12" height="12" rx="2"/>
+                <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>
+              </svg>
+            </button>
+            <button class="msg-action-btn" disabled title="Edit (coming soon)">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 20h9"/>
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
       {:else}
+        {@const { context, consequence } = splitActivity(msg.activity)}
         <div class="turn assistant">
-          {#if session.processing && idx === session.messages.length - 1}
-            <div class="processing-container">
-              <div class="typing-indicator"><span></span><span></span><span></span></div>
-            </div>
-          {/if}
+          <ThinkingTrace
+            activity={groupedActivity(context)}
+            startedAt={msg.startedAt}
+            settledAt={msg.settledAt}
+          />
 
           <div class="prose">{@html renderMarkdown(msg.content, citationSources(msg.activity))}</div>
+
+          {#if !session.streaming || idx !== session.messages.length - 1}
+            <div class="msg-actions">
+              <button class="msg-action-btn" onclick={() => copyMessage(msg.content)} title="Copy">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="8" y="8" width="12" height="12" rx="2"/>
+                  <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>
+                </svg>
+              </button>
+              <button class="msg-action-btn" onclick={() => retryMessage(idx)} title="Retry">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 12a9 9 0 0 1 15.3-6.4L21 8"/>
+                  <path d="M21 3v5h-5"/>
+                  <path d="M21 12a9 9 0 0 1-15.3 6.4L3 16"/>
+                  <path d="M3 21v-5h5"/>
+                </svg>
+              </button>
+              <button class="msg-action-btn" disabled title="Feedback (coming soon)">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M7 10v11"/>
+                  <path d="M15 5.88 14 10h6.29a2 2 0 0 1 1.92 2.56l-2.32 8A2 2 0 0 1 17.96 22H7a2 2 0 0 1-2-2v-9a2 2 0 0 1 .59-1.41L11 4a2 2 0 0 1 3 1.72Z"/>
+                </svg>
+              </button>
+              <button class="msg-action-btn" disabled title="Feedback (coming soon)">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M17 14V3"/>
+                  <path d="M9 18.12 10 14H3.71a2 2 0 0 1-1.92-2.56l2.32-8A2 2 0 0 1 6.04 2H17a2 2 0 0 1 2 2v9a2 2 0 0 1-.59 1.41L13 20a2 2 0 0 1-3-1.72Z"/>
+                </svg>
+              </button>
+              <span class="msg-time">{formatTimestamp(msg.created_at)}</span>
+            </div>
+          {/if}
 
           {#if msg.error}
             <InlineNotification kind="error" title="Error" subtitle={msg.error} />
           {/if}
 
-          {#each groupedActivity(msg.activity) as act}
+          {#each consequence as act}
             {#if act.kind === "conflict"}
               <ConflictBlock {act} onResolve={(choice) => resolve(act, choice)} />
             {:else if act.kind === "forget_request"}
               <ForgetBlock {act} onResolve={(choice) => resolveForget(act, choice)} />
             {:else if act.kind === "commitment_resolution_request"}
               <CommitmentResolutionBlock {act} onResolve={(choice) => resolveCommitmentRequest(act, choice)} />
+            {:else if act.kind === "memory_write"}
+              <MemoryWriteRow {act} />
             {:else}
               <ActivityStrip {act} {chatId} />
             {/if}
@@ -358,30 +461,6 @@
   }
   .menu-item:hover { background: var(--surface-sunken); }
 
-  .processing-container {
-    display: flex;
-    align-items: center;
-    padding: 0.5rem 0;
-  }
-
-  .typing-indicator {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-  }
-
-  .typing-indicator span {
-    width: 6px;
-    height: 6px;
-    background-color: var(--text-muted);
-    border-radius: 50%;
-    animation: bounce 1.4s infinite ease-in-out both;
-  }
-
-  .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-  .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-  .typing-indicator span:nth-child(3) { animation-delay: 0s; }
-
   @keyframes bounce {
     0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
     40% { transform: scale(1); opacity: 1; }
@@ -404,7 +483,8 @@
 
   .turn.user {
     display: flex;
-    justify-content: flex-end;
+    flex-direction: column;
+    align-items: flex-end;
   }
   .said {
     max-width: 34rem;
@@ -519,6 +599,12 @@
     padding: var(--space-2) var(--space-3);
     color: var(--text-secondary);
     font-style: italic;
+  }
+
+  .prose :global(.citation.flip-below::after) {
+    bottom: auto;
+    top: 100%;
+    transform: translateX(-50%) translateY(6px);
   }
 
   .prose :global(code) {
@@ -704,4 +790,33 @@
   }
   .editor-wrapper :global(.cm-gutters) { display: none !important; }
   .editor-wrapper :global(.cm-activeLine) { background-color: transparent !important; }
+
+  .msg-actions {
+    display: flex; align-items: center; gap: var(--space-2);
+    margin-top: var(--space-2);
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .turn:hover .msg-actions { opacity: 1; }
+
+  .user-actions { justify-content: flex-end; }
+
+  .msg-action-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 1.6rem; height: 1.6rem;
+  padding: 0;           
+  background: none; border: none;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+  .msg-action-btn:hover:not(:disabled) { color: var(--text-secondary); background: var(--surface-sunken); }
+  .msg-action-btn:disabled { opacity: 0.4; cursor: default; }
+  .msg-action-btn svg { display: block; }
+
+  .msg-time {
+    font-size: var(--size-caption);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
 </style>

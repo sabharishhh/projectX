@@ -1,4 +1,3 @@
-import os
 import json
 from state import CAPTURE_MODEL
 

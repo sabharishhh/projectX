@@ -30,9 +30,10 @@ model is told to prefer it for load-bearing claims but may cite a search
 snippet directly when it's sufficient. memory_search results are never
 citation-numbered — they're not web sources."""
 
+import re
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from pipeline import Stage, Pipeline
 
 from mcp_client import MCPClient
 from mcp_server import NOT_EXTRACTED_PREFIX
@@ -42,25 +43,50 @@ MAX_TOOL_ITERATIONS = 5
 _client: MCPClient | None = None
 
 CITATION_INSTRUCTION = (
-    "You have web_search, web_fetch, and memory_search tools (only the ones "
-    "relevant to this turn may actually be available). Both web_search and "
-    "web_fetch results are numbered [1], [2], etc. as you use them — cite "
-    "inline using that number when you rely on information from it. Prefer "
-    "fetching a page with web_fetch when a claim needs solid grounding, but "
-    "a web_search snippet may be cited directly when it's sufficient on its "
-    "own — phrase claims sourced only from a snippet a little more "
-    "cautiously than ones confirmed by a fetched page. Only cite a source "
-    "for a claim it actually supports. Cite each specific claim with the "
-    "specific source(s) that support it — don't pile multiple citation "
-    "numbers onto one broad or summary sentence; if you're making several "
-    "distinct points, split them into separate sentences each with its own "
-    "precise citation. memory_search results are the user's own saved "
-    "facts, not web sources — don't cite them with [n]. Before searching "
-    "again, check whether your new query meaningfully differs from ones "
-    "you've already tried — repeating a search wastes a turn and will be "
-    "flagged back to you instead of actually re-run."
+    "You have web_search, web_fetch, github_search, and memory_search tools "
+    "(only the ones relevant to this turn may actually be available). "
+    "web_search, github_search, and web_fetch results are numbered [1], [2], "
+    "etc. as you use them — cite inline using that exact bracket-number "
+    "format, and nothing else. Never write the word 'cite' or any other citation marker "
+    "text in your reply — the ONLY valid citation format is a plain number "
+    "in square brackets. Prefer fetching a page with web_fetch when a claim "
+    "needs solid grounding, but a web_search snippet may be cited directly "
+    "when it's sufficient on its own — phrase claims sourced only from a "
+    "snippet a little more cautiously than ones confirmed by a fetched page. "
+    "Only cite a source for a claim it actually supports. Cite each specific "
+    "claim with the specific source(s) that support it — don't pile multiple "
+    "citation numbers onto one broad or summary sentence; if you're making "
+    "several distinct points, split them into separate sentences each with "
+    "its own precise citation. memory_search results are the user's own "
+    "saved facts, not web sources — don't cite them with [n]. Before "
+    "searching again, check whether your new query meaningfully differs "
+    "from ones you've already tried — repeating a search wastes a turn and "
+    "will be flagged back to you instead of actually re-run.\n\n"
+    "When you make a real judgment call while working — rejecting a source "
+    "as unreliable or off-topic, narrowing or pivoting a search query "
+    "because the first attempt wasn't productive, choosing one source over "
+    "another when they conflict — briefly say why, on its own line, wrapped "
+    "exactly like this: [[reasoning: your one-sentence rationale]]. Use this "
+    "only for real decisions worth explaining, not for every step — most "
+    "tool calls need no explanation at all. Never use this marker in your "
+    "final answer to the user, only while working."
 )
 
+_REASONING_MARKER = re.compile(r'\[\[reasoning:\s*(.*?)\s*\]\]', re.DOTALL)
+
+def _split_reasoning(text: str) -> tuple[str, list[str]]:
+    """Pulls [[reasoning: ...]] markers out of a round's buffered text —
+    each becomes its own narration, and the marker itself is removed from
+    what actually reaches the user as answer prose. This is the general
+    narration mechanism: unlike the sufficiency-check's own reasoning
+    events (which fire from a separate fixed check), this lets the model
+    flag ANY real judgment call it makes mid-loop — source rejection,
+    query pivots, conflicting-source calls — in its own words, not a
+    fixed set of triggers."""
+    notes = _REASONING_MARKER.findall(text)
+    remaining = _REASONING_MARKER.sub('', text)
+    remaining = re.sub(r'\n{3,}', '\n\n', remaining).strip()
+    return remaining, notes
 
 def _get_client() -> MCPClient:
     global _client
@@ -68,16 +94,43 @@ def _get_client() -> MCPClient:
         _client = MCPClient("python", ["mcp_server.py"])
     return _client
 
+_MD_IMAGE = re.compile(r'!\[.*?\]\(.*?\)')
+_MD_LINK = re.compile(r'\[([^\]]*)\]\([^)]*\)')
+
+def _strip_markdown_noise(text: str) -> str:
+    """Scraped pages routinely open with nav/skip-links or logo markup
+    ('[](url)[Site Name]') before any real content — raw markdown taken
+    straight from a fetched page's first N characters spends the preview
+    window on that boilerplate instead of actual content. Strips image
+    and link syntax (keeping a link's visible text, dropping the URL and
+    dropping empty-text links entirely), then collapses whitespace —
+    applied BEFORE truncation, not after, so the visible window is spent
+    on real text."""
+    text = _MD_IMAGE.sub('', text)
+    text = _MD_LINK.sub(lambda m: m.group(1), text)
+    return re.sub(r'\s+', ' ', text).strip()
 
 def _to_responses_tools(mcp_tools: list[dict], allowed: set[str] | None) -> list[dict]:
     tools = mcp_tools if allowed is None else [t for t in mcp_tools if t["name"] in allowed]
-    return [{"type": "function", "name": t["name"], "description": t["description"],
-             "parameters": t["input_schema"]} for t in tools]
+    out = []
+    for t in tools:
+        schema = t["input_schema"]
+        # conversation_history_search's conversation_id is injected by
+        # run() at dispatch time, never supplied by the model — hiding it
+        # from the schema the model sees keeps that guarantee real rather
+        # than just documented in a docstring the model could ignore.
+        if t["name"] == "conversation_history_search" and "properties" in schema:
+            schema = {**schema, "properties": {k: v for k, v in schema["properties"].items() if k != "conversation_id"},
+                      "required": [r for r in schema.get("required", []) if r != "conversation_id"]}
+        out.append({"type": "function", "name": t["name"], "description": t["description"], "parameters": schema})
+    return out
 
 
 def _step_label(name: str, tool_input: dict) -> str:
     if name == "web_search":
         return f"Searching: {tool_input.get('query', '')}"
+    if name == "github_search":
+        return f"Searching GitHub: {tool_input.get('query', '')}"
     if name == "web_fetch":
         return f"Reading: {tool_input.get('url', '')}"
     if name == "memory_search":
@@ -89,9 +142,11 @@ def _normalize_query(q: str) -> str:
     return " ".join(q.lower().split())
 
 
-def _repeat_cache_and_key(event: dict, tried_queries: dict, tried_urls: dict):
+def _repeat_cache_and_key(event: dict, tried_queries: dict, tried_urls: dict, tried_github: dict):
     if event["name"] == "web_search":
         return tried_queries, _normalize_query(event["input"].get("query", ""))
+    if event["name"] == "github_search":
+        return tried_github, _normalize_query(event["input"].get("query", ""))
     if event["name"] == "web_fetch":
         return tried_urls, event["input"].get("url", "")
     return None, None
@@ -136,28 +191,42 @@ def _process_search_results(raw: str, sources: dict[str, int]) -> tuple[str, lis
 
 
 def run(provider, model: str, conversation: list[dict], reasoning_effort: str = "none",
-        allowed_tools: set[str] | None = None):
-    """Yields the same {"type": "text"/"activity"} shapes chat_engine already
-    streams. allowed_tools restricts which of the MCP server's tools are
-    actually offered this turn — None means all (backward-compatible
-    default); chat_engine.py assembles the real per-turn set."""
+        allowed_tools: set[str] | None = None, disconnected=None, conversation_id: str | None = None):
     client = _get_client()
     tools = _to_responses_tools(client.list_tools(), allowed_tools)
     messages = list(conversation) + [{"role": "system", "content": CITATION_INSTRUCTION}]
     sources: dict[str, int] = {}
-    tried_queries: dict[str, str] = {}  # normalized web_search query -> result
-    tried_urls: dict[str, str] = {}     # web_fetch url -> result
+    tried_queries: dict[str, str] = {}
+    tried_urls: dict[str, str] = {}
+    tried_github: dict[str, str] = {}
 
     for _ in range(MAX_TOOL_ITERATIONS):
+        if disconnected is not None and disconnected.is_set():
+            logger.info("agentic_search: disconnected — stopping before next round, not issuing further tool calls")
+            return
+
         pending_calls = []
+        round_text = []
         for event in provider.stream_with_tools(messages, model, tools, reasoning_effort=reasoning_effort):
             if event["type"] == "text":
-                yield {"type": "text", "value": event["text"]}
+                round_text.append(event["text"])
             elif event["type"] == "tool_call":
                 pending_calls.append(event)
 
+        buffered_text = "".join(round_text)
+        if buffered_text:
+            clean_text, reasoning_notes = _split_reasoning(buffered_text)
+            for note in reasoning_notes:
+                yield {"type": "activity", "event": {"kind": "reasoning", "label": note}}
+            if clean_text:
+                yield {"type": "text", "value": clean_text}
+
         if not pending_calls:
-            return  # model gave a real final answer — done, no synthesis needed
+            return
+
+        if disconnected is not None and disconnected.is_set():
+            logger.info("agentic_search: disconnected after this round's model turn — dropping pending tool calls, not dispatching")
+            return
 
         # Phase 1 — classify repeats sequentially, before anything runs
         # concurrently. Claiming the cache slot for a genuinely-new call
@@ -168,27 +237,31 @@ def run(provider, model: str, conversation: list[dict], reasoning_effort: str = 
         to_run = []
         outcomes: dict[str, tuple[str, str | None]] = {}
         for event in pending_calls:
-            cache, key = _repeat_cache_and_key(event, tried_queries, tried_urls)
+            cache, key = _repeat_cache_and_key(event, tried_queries, tried_urls, tried_github)
+            if event["name"] == "conversation_history_search":
+                event = {**event, "input": {**event["input"], "conversation_id": conversation_id}}
             if key is not None and key in cache:
                 outcomes[event["call_id"]] = ("repeat", cache[key])
             else:
                 if key is not None:
-                    cache[key] = None  # claim the slot
+                    cache[key] = None
                 to_run.append((event, cache, key))
                 outcomes[event["call_id"]] = ("new", None)
 
         # Phase 2 — the actual network/MCP I/O, the expensive part, runs
         # concurrently. Nothing shared is touched inside the workers.
         if to_run:
-            with ThreadPoolExecutor(max_workers=len(to_run)) as pool:
-                futures = {pool.submit(_call_tool_raw, client, event): (event, cache, key)
-                           for event, cache, key in to_run}
-                for future in futures:
-                    event, cache, key = futures[future]
-                    raw_result = future.result()
-                    if key is not None:
-                        cache[key] = raw_result
-                    outcomes[event["call_id"]] = ("new", raw_result)
+            tool_stages = [
+                Stage(name=f"tool_{i}", deps=[], on_fail="open",
+                      fn=(lambda ctx, event=event: _call_tool_raw(client, event)))
+                for i, (event, cache, key) in enumerate(to_run)
+            ]
+            tool_context = Pipeline(tool_stages).run({})
+            for i, (event, cache, key) in enumerate(to_run):
+                raw_result = tool_context[f"tool_{i}"]
+                if key is not None:
+                    cache[key] = raw_result
+                outcomes[event["call_id"]] = ("new", raw_result)
 
         made_new_progress = bool(to_run)
 
@@ -211,15 +284,16 @@ def run(provider, model: str, conversation: list[dict], reasoning_effort: str = 
                 )
             else:
                 result = raw_result
-                if event["name"] == "web_search":
+                if event["name"] in ("web_search", "github_search"):
                     result, search_events = _process_search_results(result, sources)
                     for ev in search_events:
                         yield {"type": "activity", "event": ev}
                 elif event["name"] == "web_fetch" and not result.startswith(NOT_EXTRACTED_PREFIX):
                     url = event["input"].get("url", "")
                     n = sources.setdefault(url, len(sources) + 1)
+                    cleaned = _strip_markdown_noise(result[:800])
+                    preview = cleaned[:200].strip()
                     result = f"[{n}] {url}\n{result}"
-                    preview = result[:200].strip()
                     yield {"type": "activity", "event": {"kind": "source", "citation": n, "url": url, "preview": preview}}
 
             messages.append({"type": "function_call", "call_id": event["call_id"],

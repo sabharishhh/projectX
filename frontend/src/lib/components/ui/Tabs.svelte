@@ -1,6 +1,6 @@
 <script>
-  let { labels = [], selected = $bindable(0), children } = $props();
-  let tabRefs = [];
+  let { labels = [], selected = $bindable(0), accent = 'var(--accent-primary)', children } = $props();
+  let tabRefs = $state([]);
 
   function select(i) { selected = i; tabRefs[i]?.focus(); }
 
@@ -12,7 +12,7 @@
   }
 </script>
 
-<div class="tabs">
+<div class="tabs" style="--tabs-accent:{accent}">
   <div class="tablist" role="tablist">
     {#each labels as label, i}
       <button
@@ -45,7 +45,7 @@
     transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
   }
   .tab:hover { color: var(--text-primary); }
-  .tab.selected { color: var(--text-primary); border-bottom-color: var(--accent-primary); }
-  .tab:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+  .tab.selected { color: var(--text-primary); border-bottom-color: var(--tabs-accent); }
+  .tab:focus-visible { outline: 2px solid var(--tabs-accent); outline-offset: -2px; }
   .panels { flex: 1; overflow-y: auto; padding: var(--space-4); }
 </style>

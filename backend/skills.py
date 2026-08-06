@@ -4,11 +4,10 @@ import tomllib
 from pathlib import Path
 
 SKILLS_DIR = Path(__file__).parent / "skills"
-from state import CAPTURE_MODEL as SKILL_MODEL
+from state import CAPTURE_MODEL as SKILL_MODEL, CLASSIFY_TIMEOUT_SECONDS
 
 
 def load_skills() -> dict[str, dict]:
-    """Read every .toml in skills/. A malformed file is skipped, not fatal."""
     skills = {}
     if not SKILLS_DIR.exists():
         return skills
@@ -24,6 +23,7 @@ def load_skills() -> dict[str, dict]:
                 "system_prompt": data.get("system_prompt", "").strip(),
                 "tools": data.get("tools", []),
                 "boost_types": data.get("boost_types", []),
+                "skip_identity": data.get("skip_identity", False),
             }
         except Exception:
             continue
@@ -61,6 +61,7 @@ def select(provider, message: str) -> dict | None:
                 {"role": "user", "content": message},
             ],
             SKILL_MODEL,
+            deadline_seconds=CLASSIFY_TIMEOUT_SECONDS,
         ))
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         return SKILLS.get(parsed.get("skill")) if parsed.get("skill") else None

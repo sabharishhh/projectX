@@ -37,11 +37,13 @@
       </div>
     </header>
 
-    <Tabs labels={TAB_TITLES} bind:selected={selectedTab}>
-      <TabPanel index={0} selected={selectedTab}><MemoryView {memory} {onopensource} {ondelete} {onedit} {oncreate} /></TabPanel>
-      <TabPanel index={1} selected={selectedTab}><TimelineView {history} /></TabPanel>
-      <TabPanel index={2} selected={selectedTab}><SourcesView {messages} /></TabPanel>
-    </Tabs>
+    <div class="tabs-wrap">
+      <Tabs labels={TAB_TITLES} bind:selected={selectedTab} accent="var(--accent-attention)">
+        <TabPanel index={0} selected={selectedTab}><MemoryView {memory} {onopensource} {ondelete} {onedit} {oncreate} /></TabPanel>
+        <TabPanel index={1} selected={selectedTab}><TimelineView {history} /></TabPanel>
+        <TabPanel index={2} selected={selectedTab}><SourcesView {messages} /></TabPanel>
+      </Tabs>
+    </div>
   </aside>
 {/if}
 
@@ -60,4 +62,6 @@
   }
   .drawer-header h2 { margin: 0; font-family: var(--font-display); font-size: var(--size-title); font-weight: var(--weight-semibold); color: var(--text-primary); }
   .header-actions { display: flex; align-items: center; gap: 0.3rem; }
+
+  .tabs-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 </style>

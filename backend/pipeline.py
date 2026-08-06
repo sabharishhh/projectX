@@ -76,6 +76,8 @@ class Pipeline:
                 logger.info(f"disconnected — stopping before {[s.name for s in ready]}")
                 return context
 
+            logger.info(f"[pipeline] executor queue depth ~{self.executor._pool._work_queue.qsize()}")
+
             futures: dict[Future, Stage] = {}
             for s in ready:
                 if s.gate is not None and not s.gate(context):

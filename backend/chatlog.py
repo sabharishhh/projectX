@@ -19,8 +19,10 @@ def _summarize_activity(activity_log: list[dict]) -> list[str]:
     lines = []
     for a in activity_log:
         kind = a.get("kind")
-        if kind in ("skill", "source"):
-            continue  # skill logged separately; source is citation bookkeeping only
+        if kind in ("skill", "source", "correction_check"):
+            continue  # skill logged separately; source is citation bookkeeping;
+                       # correction_check is a transient "checking..." indicator
+                       # with nothing left to say once the turn has completed
         elif kind == "memory_read":
             lines.append(f"recalled {len(a.get('units', []))} facts")
         elif kind == "memory_write":
@@ -38,6 +40,14 @@ def _summarize_activity(activity_log: list[dict]) -> list[str]:
             lines.append(f"forget requested: {a.get('content', '')}")
         elif kind == "duplicate_skipped":
             lines.append(f"duplicate skipped: {a.get('content', '')}")
+        elif kind == "time_travel":
+            lines.append(f"{a.get('label', 'time travel')} ({len(a.get('units', []))} facts as of that point)")
+        elif kind == "commitments_due":
+            lines.append(f"{len(a.get('units', []))} commitment(s) surfaced as due soon")
+        elif kind == "commitment_resolution_request":
+            lines.append(f"proposed {a.get('status', '?')}: {a.get('content', '')}")
+        elif kind == "reasoning":
+            lines.append(f"reasoning: {a.get('label', '')}")
     return lines
 
 
@@ -50,16 +60,24 @@ def _collect_sources(activity_log: list[dict]) -> list[str]:
             urls.extend(r["url"] for r in a.get("results", []) if r.get("url"))
     return list(dict.fromkeys(urls))  # de-dupe, preserve first-fetched/first-listed order
 
+
 def log_turn(conversation_id: str, message: str, skill: dict | None,
-             injected: list[dict], activity_log: list[dict], full_response: str) -> None:
+             injected: list[dict], activity_log: list[dict], full_response: str,
+             duration_seconds: float | None = None,
+             sufficiency: dict | None = None) -> None:
+    """duration_seconds and sufficiency are both values the caller already
+    computed during the turn (a time.monotonic() diff, and
+    check_reply_sufficiency's own result dict) — passed through for
+    logging, not recomputed here, so this adds no real overhead beyond a
+    couple of string formats and one file append, same as before."""
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        
+
         now = datetime.now(timezone.utc)
-        
+
         # 1. Search for an existing log file linked to this conversation ID
         existing_files = list(LOG_DIR.glob(f"*_{conversation_id}.md"))
-        
+
         if existing_files:
             # If found, use the existing file (keeps appending to the same session)
             path = existing_files[0]
@@ -70,7 +88,8 @@ def log_turn(conversation_id: str, message: str, skill: dict | None,
 
         # 2. Format the standard timestamp for the markdown block header
         ts = now.strftime("%Y-%m-%d %H:%M:%SZ")
-        
+        header = f"## {ts}" + (f" ({duration_seconds:.1f}s)" if duration_seconds is not None else "")
+
         skill_line = skill["name"] if skill else "none"
         recalled = ", ".join(u["content"] for u in injected[:5]) or "none"
         if len(injected) > 5:
@@ -82,7 +101,7 @@ def log_turn(conversation_id: str, message: str, skill: dict | None,
             response = response[:MAX_RESPONSE_CHARS] + "… [truncated, full text in DB]"
 
         entry = [
-            f"## {ts}",
+            header,
             f"**User:** {message.strip()}",
             f"**Skill:** {skill_line}",
             f"**Recalled:** {recalled}",
@@ -91,6 +110,11 @@ def log_turn(conversation_id: str, message: str, skill: dict | None,
             entry.append("**Activity:** " + "; ".join(activity_lines))
         if sources:
             entry.append("**Sources:** " + ", ".join(sources))
+        if sufficiency and sufficiency.get("verdict"):
+            suff_line = f"**Sufficiency:** {sufficiency['verdict']}"
+            if sufficiency.get("reason"):
+                suff_line += f" — {sufficiency['reason']}"
+            entry.append(suff_line)
         entry += [f"**Response:** {response}", "", "---", ""]
 
         with open(path, "a", encoding="utf-8") as f:

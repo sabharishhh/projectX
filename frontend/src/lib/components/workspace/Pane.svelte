@@ -24,7 +24,7 @@
   }
 
   function titleFor(chatId) {
-    return globalMemory.conversations.find((c) => c.conversation_id === chatId)?.label ?? chatId.slice(0, 8);
+    return globalMemory.conversations.find((c) => c.conversation_id === chatId)?.label ?? "New Session";
   }
 
   function handleDrop(e) {

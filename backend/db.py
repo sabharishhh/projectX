@@ -1,6 +1,10 @@
 import json
 import sqlite3
+import logging
 from datetime import datetime, timezone
+
+logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+logger = logging.getLogger("db")
 
 DB_PATH = "loki.db"
 
@@ -55,6 +59,36 @@ def init_db():
         conn.execute("ALTER TABLE messages ADD COLUMN activity TEXT")
     if "branch" not in cols:
         conn.execute("ALTER TABLE messages ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'")
+
+    # Full-text search over raw turn content — closes the gap where
+    # something relevant fell out of WINDOW_MESSAGES and got lost in the
+    # rolling summary's lossy compression. Standalone (not external-
+    # content) FTS5 table: simpler trigger semantics, and message content
+    # is effectively append-only (activity gets patched, content never
+    # does), so there's no update-sync case to handle.
+    fts_existed = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+    ).fetchone()
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            content, conversation_id UNINDEXED, message_id UNINDEXED
+        )
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content, conversation_id, message_id)
+            VALUES (new.id, new.content, new.conversation_id, new.id);
+        END
+    """)
+    if not fts_existed:
+        # First-ever creation only — backfill every message that predates
+        # the index, since the trigger above only fires on new inserts.
+        conn.execute("""
+            INSERT INTO messages_fts(rowid, content, conversation_id, message_id)
+            SELECT id, content, conversation_id, id FROM messages
+        """)
+        logger.info("messages_fts created — backfilled existing message history")
+
     conn.commit()
     conn.close()
 
@@ -62,13 +96,13 @@ def init_db():
 def load_messages(conversation_id: str) -> list[dict]:
     conn = _connect()
     rows = conn.execute(
-        "SELECT role, content, activity FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+        "SELECT role, content, activity, created_at FROM messages WHERE conversation_id = ? ORDER BY id ASC",
         (conversation_id,),
     ).fetchall()
     conn.close()
     out = []
-    for role, content, activity in rows:
-        msg = {"role": role, "content": content}
+    for role, content, activity, created_at in rows:
+        msg = {"role": role, "content": content, "created_at": created_at}
         if activity:
             msg["activity"] = json.loads(activity)
         out.append(msg)
@@ -80,19 +114,72 @@ def to_provider_messages(msgs: list[dict]) -> list[dict]:
     return [{"role": m["role"], "content": m["content"]} for m in msgs]
 
 
-def save_message(conversation_id: str, role: str, content: str, activity: list | None = None):
+def save_message(conversation_id: str, role: str, content: str, activity: list | None = None) -> int:
     conn = _connect()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO messages (conversation_id, role, content, activity, created_at) VALUES (?, ?, ?, ?, ?)",
         (conversation_id, role, content, json.dumps(activity) if activity else None,
          datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
+    message_id = cur.lastrowid
     conn.close()
+    return message_id
+
+def update_message_activity(message_id: int, activity: list | None):
+    """Patches an already-saved message's activity in place — used when
+    capture/forget/resolution add events after the initial early-save,
+    so the turn ends up as one row with the final activity, not two rows."""
+    conn = _connect()
+    conn.execute(
+        "UPDATE messages SET activity = ? WHERE id = ?",
+        (json.dumps(activity) if activity else None, message_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+
+def search_messages(query: str, conversation_id: str | None = None, limit: int = 6) -> list[dict]:
+    """FTS5 keyword search over raw turn content — scope=None searches
+    every conversation (the cross-chat case), scope=<id> searches only
+    that one (the long-single-conversation case). Same underlying index
+    either way; which one gets used is a caller decision, not a schema
+    one — deliberately not turned on for true cross-chat yet, since that
+    needs its own scope decision (search everything vs. recent chats
+    only), not just a missing filter."""
+    conn = _connect()
+    terms = [w.strip() for w in query.split() if w.strip()]
+    if not terms:
+        conn.close()
+        return []
+    fts_query = " OR ".join(f'"{t}"' for t in terms)
+
+    sql = """
+        SELECT m.conversation_id, m.role, m.content, m.created_at
+        FROM messages_fts
+        JOIN messages m ON m.id = messages_fts.message_id
+        WHERE messages_fts MATCH ?
+    """
+    params = [fts_query]
+    if conversation_id is not None:
+        sql += " AND m.conversation_id = ?"
+        params.append(conversation_id)
+    sql += " ORDER BY bm25(messages_fts) LIMIT ?"
+    params.append(limit)
+
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except Exception as e:
+        logger.warning(f"search_messages failed for query={query!r}: {e!r}")
+        rows = []
+    conn.close()
+    return [{"conversation_id": r[0], "role": r[1], "content": r[2], "created_at": r[3]} for r in rows]
 
 
 def clear_messages(conversation_id: str):
     conn = _connect()
+    conn.execute("DELETE FROM messages_fts WHERE conversation_id = ?", (conversation_id,))
     conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
     conn.commit()
     conn.close()
@@ -260,3 +347,28 @@ def get_retrieval_traces(conversation_id: str, limit: int = 20) -> list[dict]:
     ).fetchall()
     conn.close()
     return [{"message": m, "trace": json.loads(t), "created_at": c} for m, t, c in rows]
+
+def mark_commitment_resolution_status(conversation_id: str, resolution_id: str, resolution: str) -> bool:
+    """Same persistence pattern as mark_conflict_status/mark_forget_status —
+    writes the resolution onto the stored message's activity so a
+    confirmed/declined commitment resolution survives reload instead of
+    reappearing as pending."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT id, activity FROM messages WHERE conversation_id = ? AND activity IS NOT NULL",
+        (conversation_id,),
+    ).fetchall()
+    for row_id, activity_json in rows:
+        events = json.loads(activity_json)
+        changed = False
+        for ev in events:
+            if ev.get("kind") == "commitment_resolution_request" and ev.get("id") == resolution_id:
+                ev["resolved"] = resolution
+                changed = True
+        if changed:
+            conn.execute("UPDATE messages SET activity = ? WHERE id = ?", (json.dumps(events), row_id))
+            conn.commit()
+            conn.close()
+            return True
+    conn.close()
+    return False

@@ -1,4 +1,5 @@
-const API_BASE_DEFAULT = "http://127.0.0.1:8000";
+import { API_BASE as DEFAULT_API_BASE } from "../config.ts";
+const STREAM_IDLE_TIMEOUT_MS = 200000;
 
 async function loadMessagesFor(chatId: string, API_BASE: string) {
   const res = await fetch(`${API_BASE}/api/messages/${chatId}`);
@@ -26,7 +27,7 @@ function createSession(): ChatSession {
   return session;
 }
 
-export function getSession(chatId: string, API_BASE = API_BASE_DEFAULT): ChatSession {
+export function getSession(chatId: string, API_BASE = DEFAULT_API_BASE): ChatSession {
   if (!sessions.has(chatId)) {
     const session = createSession();
     sessions.set(chatId, session);
@@ -54,6 +55,18 @@ async function simulateReveal(msg: any, fullText: string) {
   }
 }
 
+class StreamIdleTimeoutError extends Error {
+  constructor() { super("STREAM_IDLE_TIMEOUT"); this.name = "StreamIdleTimeoutError"; }
+}
+
+function readWithIdleTimeout(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new StreamIdleTimeoutError()), STREAM_IDLE_TIMEOUT_MS);
+  });
+  return Promise.race([reader.read(), timeout]).finally(() => clearTimeout(timer));
+}
+
 export async function sendMessage(
   chatId: string,
   API_BASE: string,
@@ -64,13 +77,15 @@ export async function sendMessage(
   const text = overrideText ?? session.input;
   if (!text.trim() || session.streaming) return;
 
-  session.messages.push({ role: "user", content: text });
+  session.messages.push({ role: "user", content: text, created_at: new Date().toISOString() });
   session.input = "";
   session.streaming = true;
   session.processing = true;
 
   const i = session.messages.length;
-  session.messages.push({ role: "assistant", content: "", activity: [], error: null });
+  session.messages.push({ role: "assistant", content: "", activity: [], error: null, startedAt: Date.now(), settledAt: null, created_at: new Date().toISOString() });
+
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
   try {
     const response = await fetch(`${API_BASE}/api/chat`, {
@@ -79,12 +94,12 @@ export async function sendMessage(
       body: JSON.stringify({ conversation_id: chatId, message: text }),
     });
 
-    const reader = response.body!.getReader();
+    reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
 
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithIdleTimeout(reader);
       session.processing = false;
       if (done) break;
 
@@ -98,6 +113,7 @@ export async function sendMessage(
         const msg = session.messages[i];
 
         if (ev.type === "text") {
+          if (msg.settledAt == null) msg.settledAt = Date.now();
           msg.activity = msg.activity.filter(
             (a: any) => a.kind !== "searching" && a.kind !== "skill" && a.kind !== "correction_check"
           );
@@ -114,7 +130,14 @@ export async function sendMessage(
       }
     }
   } catch (e: any) {
-    session.messages[i].error = e.message;
+    session.processing = false;
+    if (e instanceof StreamIdleTimeoutError) {
+      session.messages[i].error =
+        "Lost connection to the server. Please try sending your message again.";
+      try { reader?.cancel(); } catch { /* connection may already be dead */ }
+    } else {
+      session.messages[i].error = e.message || "Something went wrong. Please try again.";
+    }
   }
   session.processing = false;
   session.streaming = false;

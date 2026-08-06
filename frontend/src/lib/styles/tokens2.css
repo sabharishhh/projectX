@@ -5,15 +5,19 @@
   --neutral-40:#6f6f6f;   --neutral-30:#8d8d8d;  --neutral-20:#c6c6c6;
   --neutral-10:#e0e0e0;   --neutral-05:#f4f4f4;
 
-  /* primary ramp — Loki green, deep jade to bright neon-emerald */
-  --primary-90:#0b3d26; --primary-70:#116b3a; --primary-50:#189950;
-  --primary-40:#1cb85f; --primary-30:#2ee878; --primary-20:#7ff5ae; --primary-10:#d4fbe3;
+  /* primary ramp — Tesseract blue: near-black sapphire core deepening
+     into an electric, cyan-leaning glow at the bright end (hue shifted
+     from the original 207° sky-blue anchor to ~197°, more cyan/electric,
+     matching how the cube's glow actually reads on screen rather than a
+     flat pastel blue) */
+  --primary-90:#052a4a; --primary-70:#0a4f82; --primary-50:#0f7ec2;
+  --primary-40:#17a0e8; --primary-30:#29c5ff; --primary-20:#7fdcff; --primary-10:#dbf6ff;
 
-  /* semantic neon #2 — attention / commitments, now Loki gold (was orange-amber) */
+  /* semantic neon #2 — attention / commitments, Loki gold (unchanged) */
   --amber-90:#3d2e05; --amber-70:#664c08; --amber-50:#b8890f;
   --amber-30:#FFC72C; --amber-20:#ffd766; --amber-10:#fff0c2;
 
-  /* semantic neon #3 — danger / conflicts (unchanged, untouched deliberately) */
+  /* semantic neon #3 — danger / conflicts (unchanged, UI-semantic, not character-palette) */
   --danger-90:#3d0611; --danger-70:#63091b; --danger-50:#b31530;
   --danger-30:#FF294D; --danger-20:#ff6f89; --danger-10:#ffc2cf;
 

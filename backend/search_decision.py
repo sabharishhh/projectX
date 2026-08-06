@@ -6,8 +6,7 @@ only whether a search is needed and what to search for."""
 
 import json
 import logging
-
-from state import CAPTURE_MODEL as DECISION_MODEL
+from state import DECISION_MODEL, CLASSIFY_TIMEOUT_SECONDS
 
 logger = logging.getLogger("search_decision")
 
@@ -44,7 +43,7 @@ SEARCH_DECISION_SCHEMA = {
 def _call(provider, system: str, user: str) -> str:
     return "".join(provider.stream(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        DECISION_MODEL,
+        DECISION_MODEL, deadline_seconds=CLASSIFY_TIMEOUT_SECONDS,
     ))
 
 
@@ -58,8 +57,9 @@ def should_search(provider, message: str) -> dict | None:
                 DECISION_MODEL,
                 schema=SEARCH_DECISION_SCHEMA,
                 schema_name="search_decision",
+                deadline_seconds=CLASSIFY_TIMEOUT_SECONDS,
             )
-            logger.info(f"should_search (structured): message={message!r} result={result}")
+            logger.info(f"should_search (structured): model={DECISION_MODEL!r} message={message!r} result={result}")
             if not result.get("search"):
                 return None
             return {"query": result["query"]}
@@ -70,7 +70,7 @@ def should_search(provider, message: str) -> dict | None:
     try:
         raw = _call(provider, SEARCH_DECISION_PROMPT, message)
         parsed = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-        logger.info(f"should_search (unstructured): message={message!r} raw={raw!r} parsed={parsed}")
+        logger.info(f"should_search (unstructured): model={DECISION_MODEL!r} message={message!r} raw={raw!r} parsed={parsed}")
         if not parsed.get("search"):
             return None
         return {"query": parsed["query"]}

@@ -1,6 +1,6 @@
 <script>
   import { slide } from 'svelte/transition';
-  import { settings, dur } from '$lib/motion.js';
+  import { settings, dur } from '../motion.js';
 
   let {
     open = $bindable(false),

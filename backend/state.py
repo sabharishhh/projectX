@@ -23,6 +23,9 @@ CAPTURE_MODEL = os.getenv("CAPTURE_MODEL") or (
     model if os.getenv("PROVIDER") == "local" else "gpt-5.6-luna"
 )
 
+DECISION_MODEL = os.getenv("DECISION_MODEL") or CAPTURE_MODEL
+CLASSIFY_TIMEOUT_SECONDS = 20.0
+
 class PersistentPendingDict(dict):
     """Dict-like store for conflict/forget confirmations awaiting the
     user's decision, backed by SQLite so a backend restart between

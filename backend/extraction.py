@@ -11,6 +11,33 @@ logger = logging.getLogger("extraction")
 MIN_USEFUL_LENGTH = 200
 CRAWL_TIMEOUT_SECONDS = 20.0
 
+# Status codes and error-message substrings that indicate an anti-bot
+# block specifically, distinguished from an ordinary failure (timeout,
+# DNS, dead link) — verified against crawl4ai's actual CrawlResult schema
+# (status_code, error_message fields), not guessed. This distinction
+# matters because a paid-fallback hook should only fire on confirmed
+# blocks, not on every failure — paying for a fallback on a genuinely
+# dead URL would be wasted cost that also masks the real problem.
+BLOCK_STATUS_CODES = {403, 429, 503}
+BLOCK_MESSAGE_MARKERS = ("cloudflare", "captcha", "anti-bot", "access denied", "blocked")
+
+# Pluggable fallback slot — None by default (no fallback configured).
+# Wire in a paid unlocking service (e.g. ScraperAPI, Bright Data Web
+# Unlocker) here later if block frequency in your own logs justifies the
+# cost: FALLBACK_FETCHER = lambda url: my_provider_fetch(url). Deliberately
+# not hardcoded to any specific vendor — that's a cost/vendor decision to
+# make with evidence (how often blocks actually happen), not something to
+# bake in speculatively.
+FALLBACK_FETCHER = None
+
+
+def _is_block(result) -> bool:
+    status = getattr(result, "status_code", None)
+    if status in BLOCK_STATUS_CODES:
+        return True
+    msg = (getattr(result, "error_message", None) or "").lower()
+    return any(marker in msg for marker in BLOCK_MESSAGE_MARKERS)
+
 
 class _CrawlerManager:
     """One AsyncWebCrawler, one background event loop, shared across every
@@ -49,10 +76,13 @@ class _CrawlerManager:
                 try:
                     self._bg.run(old.close(), timeout=5.0)
                 except Exception:
-                    pass  # already dead — that's why we're here
+                    pass
             self.start()
 
-    def crawl(self, url: str) -> str | None:
+    def crawl(self, url: str) -> tuple[str | None, bool]:
+        """Returns (text, was_blocked). was_blocked is only meaningful
+        when text is None — distinguishes a confirmed anti-bot block from
+        any other failure mode (timeout, dead link, crawler crash)."""
         if self._crawler is None:
             with self._lock:
                 if self._crawler is None:
@@ -61,13 +91,14 @@ class _CrawlerManager:
             async def _do():
                 result = await self._crawler.arun(url=url)
                 if result.success and result.markdown:
-                    return result.markdown.fit_markdown or result.markdown.raw_markdown
-                return None
+                    text = result.markdown.fit_markdown or result.markdown.raw_markdown
+                    return text, False
+                return None, _is_block(result)
             return self._bg.run(_do(), timeout=CRAWL_TIMEOUT_SECONDS)
         except Exception as e:
             logger.warning(f"crawl failed for {url}: {e!r}")
             self._respawn()
-            return None
+            return None, False
 
 
 _manager: _CrawlerManager | None = None
@@ -92,10 +123,29 @@ def close():
 
 
 def extract_page(url: str) -> dict:
-    """Returns {url, text, method}. text is None if extraction failed. Same
-    contract as before — research.py needs no changes."""
-    text = _get_manager().crawl(url)
+    """Returns {url, text, method}. text is None if extraction failed.
+    method distinguishes 'crawl4ai' (success), 'fallback' (block detected,
+    FALLBACK_FETCHER recovered it), 'blocked' (block detected, no fallback
+    configured or fallback also failed), and 'failed' (any other failure).
+    This is a superset of the old contract — old callers checking only
+    `text`/truthiness see no change; new callers can branch on `method`
+    if they want to distinguish "permanently dead" from "blocked, might
+    work via a different route"."""
+    text, was_blocked = _get_manager().crawl(url)
+
     if text and len(text) >= MIN_USEFUL_LENGTH:
         return {"url": url, "text": text, "method": "crawl4ai"}
+
+    if was_blocked:
+        logger.warning(f"extraction blocked (anti-bot) for {url}")
+        if FALLBACK_FETCHER is not None:
+            try:
+                fallback_text = FALLBACK_FETCHER(url)
+                if fallback_text and len(fallback_text) >= MIN_USEFUL_LENGTH:
+                    return {"url": url, "text": fallback_text, "method": "fallback"}
+            except Exception as e:
+                logger.warning(f"fallback fetcher also failed for {url}: {e!r}")
+        return {"url": url, "text": None, "method": "blocked"}
+
     logger.warning(f"extraction failed or too short for {url}")
     return {"url": url, "text": None, "method": "failed"}

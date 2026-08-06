@@ -2,6 +2,7 @@ import json
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 
+import time
 import ledger
 import logging
 import chatlog
@@ -18,10 +19,10 @@ import search_decision as search_decision_module
 from capture import (
     extract_units, commit_unit, is_semantic_duplicate, find_open_commitments,
     find_due_commitments, detect_commitment_resolutions,
-    check_correction_compliance, fetch_known_entities,
+    check_correction_compliance, check_reply_sufficiency, fetch_known_entities,
 )
 from memory import fetch_state, fetch_relevant, fetch_branches, build_system_message, fetch_state_at_time
-from db import load_messages, save_message, to_provider_messages, save_retrieval_trace
+from db import load_messages, save_message, update_message_activity, to_provider_messages, save_retrieval_trace, search_messages
 from state import provider, model, PENDING, PENDING_FORGETS, PENDING_COMMITMENT_RESOLUTIONS, MAIN_REASONING_EFFORT
 
 
@@ -51,6 +52,25 @@ def _stage_summarize(ctx: dict):
     )
 
 
+def _stage_skill_select(ctx):
+    try:
+        return skill_registry.select(provider, ctx["message"])
+    except Exception as e:
+        ledger.log("classify_failed", f"skill selection failed: {e!r}", "system", actor="system")
+        return None
+
+def _stage_search_decision(ctx):
+    try:
+        return search_decision_module.should_search(provider, ctx["message"])
+    except Exception as e:
+        ledger.log("classify_failed", f"search decision failed: {e!r}", "system", actor="system")
+        return None
+
+_classify_pipeline = Pipeline([
+    Stage("skill_select", deps=[], on_fail="open", fn=_stage_skill_select),
+    Stage("search_decision", deps=[], on_fail="open", fn=_stage_search_decision),
+])
+
 # Reused across every stream_chat call — a single long-lived pipeline for
 # post-response background work, not one created per turn. This also means
 # post_response._background naturally tracks every summarization job
@@ -66,34 +86,21 @@ post_response = Pipeline([
 def _classify(message: str) -> tuple[dict | None, dict | None]:
     """Skill-selection and search-decision are both independent LLM
     classifications of the same message — neither reads the other's
-    output — so they run concurrently instead of one after another.
-    search_decision fires unconditionally and gets discarded here if the
-    resolved skill turns out to disallow web_search. Both futures are
-    read defensively — if either classifier's own internal retry/error
-    handling is ever exhausted (a real, observed failure, not
-    theoretical), that must degrade this turn to "no skill, no search"
-    rather than crash the entire turn with an unhandled exception."""
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        skill_future = pool.submit(skill_registry.select, provider, message)
-        search_decision_future = pool.submit(search_decision_module.should_search, provider, message)
-
-        try:
-            skill = skill_future.result()
-        except Exception as e:
-            ledger.log("classify_failed", f"skill selection failed: {e!r}", "system", actor="system")
-            skill = None
-
-        try:
-            search_decision = search_decision_future.result()
-        except Exception as e:
-            ledger.log("classify_failed", f"search decision failed: {e!r}", "system", actor="system")
-            search_decision = None
+    output — so they run concurrently. Now two declared Stages instead of
+    a hand-nested ThreadPoolExecutor; Pipeline derives the same
+    concurrency from both having deps=[]. Each stage's own try/except is
+    kept (not delegated to Pipeline's generic on_fail handling) so the
+    exact same ledger.log('classify_failed', ...) call still fires on
+    failure — that's a user-visible audit trail via /api/ledger, not
+    just a debug log, and needed to survive the migration unchanged."""
+    context = _classify_pipeline.run({"message": message})
+    skill = context["skill_select"]
+    search_decision = context["search_decision"]
 
     if not skill_registry.allows(skill, "web_search"):
         search_decision = None
 
     return skill, search_decision
-
 
 # --- Phase: memory gathering ---
 
@@ -218,11 +225,22 @@ def _build_commitment_context(due_commitments: list[dict]) -> dict | None:
         }
     return {
         "role": "system",
-        "content": "There are currently NO open commitments tracked for this user — "
-                   "if asked about commitments, tasks, or reminders, say so plainly. "
-                   "This is the current, authoritative state, overriding anything "
-                   "said earlier in this conversation.",
+        "content": "None of the user's open commitments are due within the next 48 "
+                   "hours — that's the only thing this means. You DO track and store "
+                   "commitments normally; don't claim you can't add reminders or don't "
+                   "track commitments at all. If asked what's coming up soon, say "
+                   "nothing is due soon. If asked about commitments generally, check "
+                   "what's actually in memory rather than assuming none exist.",
     }
+
+
+def _should_check_sufficiency(skill: dict | None, injected: list[dict], search_decision: dict | None) -> bool:
+    """Gate, decided BEFORE generation runs (nothing about activity_log
+    exists yet at that point) — real context in play (recalled memory, an
+    active skill, or a search) means the answer is worth checking; plain
+    small talk with none of the three isn't, and skipping it there is what
+    keeps this from doubling the cost of every single turn."""
+    return bool(injected) or skill is not None or search_decision is not None
 
 def _build_correction_context(active_corrections: list[dict]) -> dict | None:
     """Stated explicitly, up front — not because the check downstream
@@ -250,7 +268,8 @@ def _build_conversation(conversation_id: str, message: str, skill: dict | None,
 
     correction_context = _build_correction_context(active_corrections)
 
-    return [build_system_message(injected, (skill or {}).get("system_prompt"))] \
+    return build_system_message(injected, (skill or {}).get("system_prompt"),
+                                 include_identity=not (skill or {}).get("skip_identity", False)) \
         + ([{"role": "system", "content": f"Summary of earlier conversation:\n{summary}"}] if summary else []) \
         + ([forget_context] if forget_context else []) \
         + ([commitment_context] if commitment_context else []) \
@@ -258,33 +277,52 @@ def _build_conversation(conversation_id: str, message: str, skill: dict | None,
         + to_provider_messages(visible_history) \
         + [{"role": "user", "content": message}]
 
+def _system_context_from_conversation(conversation: list[dict], activity_log: list[dict] | None = None) -> str:
+    """Pre-generation context (due commitments, recalled facts, summary)
+    plus sources actually found DURING this turn's search. The second
+    half matters: agentic_search.run()'s source list only ever lands in
+    activity_log, live, mid-generation — it never re-enters `conversation`
+    before the sufficiency check runs. Without it, the checker sees a
+    reply's [N] citations with no idea what they reference, and judges
+    real, correctly-grounded citations as unexplained noise — exactly
+    what caused a genuinely well-sourced search reply to be flagged as
+    insufficient and regenerated into a false self-disclaimer."""
+    parts = [m["content"] for m in conversation if m["role"] == "system"]
+    sources = [a for a in (activity_log or []) if a.get("kind") == "source"]
+    if sources:
+        lines = [f"[{a['citation']}] {a.get('url', '')} — {a.get('preview', '')}" for a in sources]
+        parts.append("Sources found and cited during this turn's search:\n" + "\n".join(lines))
+    return "\n\n".join(parts)
 
 # --- Phase: reply generation ---
-
 def _generate_reply(conversation_id: str, conversation: list[dict], skill: dict | None,
-                     search_decision: dict | None, activity_log: list[dict]):
-    """... (docstring unchanged) ...
-    Yields RAW event dicts now, not pre-serialized SSE strings — the
-    caller (_generate_reply_gated) needs to inspect event types to know
-    what to buffer versus forward live. SSE-wrapping now happens exactly
-    once, at that boundary, not scattered across this function too."""
+                     search_decision: dict | None, activity_log: list[dict], disconnected=None):
     memory_allowed = skill_registry.allows(skill, "memory_search")
     web_needed = search_decision is not None and skill_registry.allows(skill, "web_fetch")
 
     allowed_tools = set()
     if memory_allowed:
         allowed_tools.add("memory_search")
+        allowed_tools.add("list_open_commitments")
+        allowed_tools.add("conversation_history_search")
     if web_needed:
-        allowed_tools.update({"web_search", "web_fetch"})
+        allowed_tools.update({"web_search", "web_fetch", "github_search"})
 
     use_agentic = provider.supports_tools and bool(allowed_tools)
+
+    logger.info(f"[{conversation_id}] reply-path: skill={skill!r} search_decision={search_decision!r} "
+                f"memory_allowed={memory_allowed} web_needed={web_needed} "
+                f"allowed_tools={allowed_tools} use_agentic={use_agentic}")
+
     full_response = ""
 
     if use_agentic:
         try:
             for event in agentic_search.run(provider, model, conversation,
                                              reasoning_effort=MAIN_REASONING_EFFORT,
-                                             allowed_tools=allowed_tools):
+                                             allowed_tools=allowed_tools,
+                                             disconnected=disconnected,
+                                             conversation_id=conversation_id):
                 if event["type"] == "text":
                     full_response += event["value"]
                 yield event
@@ -313,30 +351,26 @@ def _generate_reply(conversation_id: str, conversation: list[dict], skill: dict 
 
 def _generate_reply_gated(conversation_id: str, conversation: list[dict], skill: dict | None,
                            search_decision: dict | None, activity_log: list[dict],
-                           active_corrections: list[dict]):
+                           active_corrections: list[dict], disconnected=None,
+                           check_sufficiency: bool = False, message: str = ""):
     """The only function stream_chat calls for reply generation now.
 
-    When active_corrections is empty (the common case), this is a thin
-    pass-through — re-wraps _generate_reply's raw dicts as SSE and
-    forwards them, byte-for-byte the same behavior as calling
-    _generate_reply directly. Zero added latency, zero behavior change.
+    Fast pass-through only when NEITHER standing corrections NOR the
+    sufficiency gate apply — the common case (plain small talk, no
+    context in play) keeps live token-by-token streaming with zero added
+    latency. Otherwise: buffer the full reply, run correction-check
+    (existing, unchanged), then sufficiency-check (new) against the
+    corrected-or-original result, each with its own regenerate-on-failure
+    pass — the user only ever sees the final settled text, streamed once
+    via simulated reveal."""
+    gen = _generate_reply(conversation_id, conversation, skill, search_decision, activity_log, disconnected)
 
-    When corrections are active: text is buffered instead of streamed
-    live; activity events (search/tool steps) still pass through live,
-    so the wait is never blank. Once generation completes, the buffered
-    reply is checked exactly once. Compliant -> released as one text
-    event, marked for simulated reveal on the frontend. Violated -> one
-    corrective regeneration pass, informed of exactly what was wrong —
-    the flawed first draft is never shown; only the corrected version
-    ever reaches the client."""
-    gen = _generate_reply(conversation_id, conversation, skill, search_decision, activity_log)
-
-    if not active_corrections:
+    if not active_corrections and not check_sufficiency:
         while True:
             try:
                 event = next(gen)
             except StopIteration as stop:
-                return stop.value
+                return (*stop.value, None)
             yield _sse(event)
 
     buffered_text = []
@@ -351,37 +385,94 @@ def _generate_reply_gated(conversation_id: str, conversation: list[dict], skill:
             buffered_text.append(event["value"])
         elif event["type"] == "error":
             yield _sse(event)
-            return "".join(buffered_text), True
+            return "".join(buffered_text), True, None
         else:
             yield _sse(event)
 
     if errored:
-        return full_response, True
+        return full_response, True, None
 
-    check = check_correction_compliance(provider, active_corrections, full_response)
-    if check.get("compliant", True):
-        yield _sse({"type": "text", "value": full_response, "reveal": "simulated"})
-        return full_response, False
+    if active_corrections:
+        check = check_correction_compliance(provider, active_corrections, full_response)
+        if not check.get("compliant", True):
+            guidance = check.get("guidance") or "Revise to follow the standing corrections exactly."
+            corrective_conversation = conversation + [
+                {"role": "assistant", "content": full_response},
+                {"role": "system", "content": f"That reply violated a standing correction: {guidance} "
+                                                "Regenerate a corrected reply from scratch — don't reference "
+                                                "or apologize for the previous draft, the user never saw it."},
+            ]
+            try:
+                full_response = "".join(provider.stream(corrective_conversation, model, reasoning_effort=MAIN_REASONING_EFFORT))
+                ledger.log("correction_enforced", f"guidance={guidance}", conversation_id, actor="system")
+            except Exception as e:
+                ledger.log("correction_regen_failed", f"{e!r} — serving original draft", conversation_id, actor="system")
 
-    guidance = check.get("guidance") or "Revise to follow the standing corrections exactly."
-    corrective_conversation = conversation + [
-        {"role": "assistant", "content": full_response},
-        {"role": "system", "content": f"That reply violated a standing correction: {guidance} "
-                                        "Regenerate a corrected reply from scratch — don't reference "
-                                        "or apologize for the previous draft, the user never saw it."},
-    ]
-    try:
-        corrected = "".join(provider.stream(corrective_conversation, model, reasoning_effort=MAIN_REASONING_EFFORT))
-    except Exception as e:
-        # Regeneration itself failed — serve the original imperfect draft
-        # rather than give the user nothing at all.
-        ledger.log("correction_regen_failed", f"{e!r} — serving original draft", conversation_id, actor="system")
-        yield _sse({"type": "text", "value": full_response, "reveal": "simulated"})
-        return full_response, False
+    sufficiency_result = None
+    if check_sufficiency:
+        context_summary = _system_context_from_conversation(conversation, activity_log)
+        result = check_reply_sufficiency(provider, message, full_response, context_summary)
+        sufficiency_result = result
+        verdict = result.get("verdict", "answer")
 
-    yield _sse({"type": "text", "value": corrected, "reveal": "simulated"})
-    ledger.log("correction_enforced", f"guidance={guidance}", conversation_id, actor="system")
-    return corrected, False
+        if verdict == "clarify":
+            reason = result.get("reason") or "missing information"
+            ev = {"kind": "reasoning", "label": f"Reconsidering: {reason}"}
+            activity_log.append(ev)
+            yield _sse({"type": "activity", "event": ev})
+
+            instruction = (f"Your draft reply can't actually be completed — {reason} "
+                            "Don't guess. Ask the user a direct, specific clarifying question "
+                            "instead of answering. Don't reference the previous draft, the user "
+                            "never saw it.")
+            regen_conversation = conversation + [
+                {"role": "assistant", "content": full_response},
+                {"role": "system", "content": instruction},
+            ]
+            try:
+                full_response = "".join(provider.stream(regen_conversation, model, reasoning_effort=MAIN_REASONING_EFFORT))
+                ledger.log("sufficiency_regenerated", f"verdict=clarify reason={reason}", conversation_id, actor="system")
+            except Exception as e:
+                ledger.log("sufficiency_regen_failed", f"{e!r} — serving prior draft", conversation_id, actor="system")
+
+        elif verdict == "search_more":
+            reason = result.get("reason") or "missing information"
+            ev = {"kind": "reasoning", "label": f"Checking earlier in this conversation for: {reason}"}
+            activity_log.append(ev)
+            yield _sse({"type": "activity", "event": ev})
+
+            history_hits = search_messages(reason, conversation_id=conversation_id, limit=6)
+            if history_hits:
+                hits_block = "\n".join(
+                    f"- ({h['role']}, {h['created_at']}): {h['content'][:200]}" for h in history_hits
+                )
+                instruction = (f"Your draft reply may be missing something: {reason} "
+                                f"A search of this conversation's earlier history turned up:\n{hits_block}\n\n"
+                                "Use it if it actually helps answer the question — don't force it in if "
+                                "it doesn't. If it still doesn't resolve the gap, say plainly what's "
+                                "uncertain rather than guessing.")
+                found_ev = {"kind": "reasoning", "label": f"Found {len(history_hits)} earlier message(s) that might help"}
+            else:
+                instruction = (f"Your draft reply may be missing something: {reason} "
+                                "A search of this conversation's earlier history found nothing relevant. "
+                                "Regenerate being explicit about what's uncertain or missing, rather than "
+                                "stating it as settled fact.")
+                found_ev = {"kind": "reasoning", "label": "Nothing relevant found earlier in this conversation"}
+            activity_log.append(found_ev)
+            yield _sse({"type": "activity", "event": found_ev})
+
+            regen_conversation = conversation + [
+                {"role": "assistant", "content": full_response},
+                {"role": "system", "content": instruction},
+            ]
+            try:
+                full_response = "".join(provider.stream(regen_conversation, model, reasoning_effort=MAIN_REASONING_EFFORT))
+                ledger.log("sufficiency_regenerated", f"verdict=search_more reason={reason} hits={len(history_hits)}", conversation_id, actor="system")
+            except Exception as e:
+                ledger.log("sufficiency_regen_failed", f"{e!r} — serving prior draft", conversation_id, actor="system")
+
+    yield _sse({"type": "text", "value": full_response, "reveal": "simulated"})
+    return full_response, False, sufficiency_result
 
 # --- Phase: capture (facts + conflicts) ---
 def _process_capture(conversation_id: str, message: str, full_response: str,
@@ -537,21 +628,42 @@ def _process_forgets(conversation_id: str, forget_matches: list[dict],
 
 # --- Phase: commitment resolution ---
 
+BULK_CLOSE_WORDS = ("close", "resolve", "mark", "clear", "complete", "cancel")
+
+def _mentions_bulk_commitment_close(message: str) -> bool:
+    m = message.lower()
+    return "commitment" in m and any(w in m for w in BULK_CLOSE_WORDS)
+
 def _process_commitment_resolutions(conversation_id: str, message: str, full_response: str,
                                      allowed_branches: list[str], activity_log: list[dict]):
-    """Deterministic candidate-gathering, then one bounded LLM judgment
-    over that pre-narrowed set — unchanged. What changed: a proposed
-    resolution is no longer applied immediately. It's staged in
-    PENDING_COMMITMENT_RESOLUTIONS and surfaced as a confirmation card,
-    the same pattern conflicts (PENDING) and forgets (PENDING_FORGETS)
-    already use. Nothing here writes to the memory store — that only
-    happens once the user explicitly confirms, via whatever endpoint
-    calls confirm_commitment_resolution in capture.py."""
     open_commitments = []
     for b in allowed_branches:
         open_commitments.extend({**u, "branch": b} for u in find_open_commitments(b))
 
     if not open_commitments:
+        return
+
+    if _mentions_bulk_commitment_close(message):
+        # Deterministic, no LLM judgment needed — the user asked for
+        # everything, so propose everything currently open, one card per
+        # commitment, same PENDING/confirm-before-act pattern as the
+        # single-item path. No risk of under-matching via keyword search,
+        # since this reads the authoritative open list directly.
+        for unit in open_commitments:
+            rid = uuid4().hex[:12]
+            PENDING_COMMITMENT_RESOLUTIONS[rid] = {
+                "unit": unit, "status": "cancelled",
+                "source": conversation_id, "branch": unit.get("branch", "main"),
+            }
+            ev = {
+                "kind": "commitment_resolution_request",
+                "label": f"Mark cancelled: {unit['content']}",
+                "id": rid, "content": unit["content"], "status": "cancelled",
+            }
+            activity_log.append(ev)
+            yield _sse({"type": "activity", "event": ev})
+            ledger.log("commitment_resolution_proposed", f"bulk cancelled: {unit['content']}",
+                       conversation_id, actor="system")
         return
 
     resolutions = detect_commitment_resolutions(provider, message, full_response, open_commitments)
@@ -589,6 +701,8 @@ def stream_chat(conversation_id: str, message: str, disconnected: threading.Even
     concurrency, same dependency structure, just expressed as `deps`
     instead of literal code nesting. Everything from _build_conversation
     onward is unchanged from before this migration."""
+    turn_start = time.monotonic()
+
     history = load_messages(conversation_id)
     save_message(conversation_id, "user", message)
 
@@ -619,8 +733,8 @@ def stream_chat(conversation_id: str, message: str, disconnected: threading.Even
         Stage("time_travel", deps=[], fn=_stage_time_travel),
         Stage("branches_known_commitments", deps=[], fn=_stage_branches),
         Stage("forget_detect", deps=["branches_known_commitments"], fn=_stage_forget),
-        Stage("retrieval_normal", deps=["classify", "branches_known_commitments"],
-              gate=lambda ctx: not ctx["time_travel"], fn=_stage_retrieval_normal),
+        Stage("retrieval_normal", deps=["classify", "branches_known_commitments", "time_travel"],
+            gate=lambda ctx: not ctx["time_travel"], fn=_stage_retrieval_normal),
         Stage("retrieval_time_travel", deps=["time_travel", "branches_known_commitments"],
               gate=lambda ctx: bool(ctx["time_travel"]), fn=_stage_retrieval_time_travel),
     ])
@@ -697,13 +811,15 @@ def stream_chat(conversation_id: str, message: str, disconnected: threading.Even
         activity_log.append(ev)
         yield _sse({"type": "activity", "event": ev})
 
-    full_response, errored = yield from _generate_reply_gated(
-        conversation_id, conversation, skill, search_decision, activity_log, active_corrections,
+    full_response, errored, sufficiency_result = yield from _generate_reply_gated(
+        conversation_id, conversation, skill, search_decision, activity_log, active_corrections, disconnected,
+        check_sufficiency=_should_check_sufficiency(skill, injected, search_decision),
+        message=message,
     )
     if errored:
         return
 
-    save_message(conversation_id, "assistant", full_response, activity_log)
+    assistant_message_id = save_message(conversation_id, "assistant", full_response, activity_log)
 
     if disconnected is not None and disconnected.is_set():
         logger.info(f"[{conversation_id}] client disconnected — skipping capture/forget/resolution, no orphaned writes")
@@ -719,9 +835,10 @@ def stream_chat(conversation_id: str, message: str, disconnected: threading.Even
     )
 
     persisted_activity = [a for a in activity_log if a["kind"] != "skill"]
-    save_message(conversation_id, "assistant", full_response, persisted_activity)
+    update_message_activity(assistant_message_id, persisted_activity)
 
-    chatlog.log_turn(conversation_id, message, skill, injected, activity_log, full_response)
+    chatlog.log_turn(conversation_id, message, skill, injected, activity_log, full_response,
+                      duration_seconds=time.monotonic() - turn_start, sufficiency=sufficiency_result)
     yield _sse({"type": "done"})
 
     # Fire-and-forget, but no longer a bare daemon thread with no failure

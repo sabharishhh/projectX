@@ -1,4 +1,3 @@
-import os
 import json
 import logging
 from datetime import datetime, timezone, timedelta
@@ -12,8 +11,6 @@ logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 logger = logging.getLogger("capture")
 
 DUPLICATE_SIMILARITY_THRESHOLD = 0.92
-
-CAPTURE_MODEL = os.getenv("CAPTURE_MODEL", "gpt-5.6-luna")
 
 ENTITY_TYPES = ["person", "project", "concept", "organization", "place", "animal", "other"]
 
@@ -326,6 +323,53 @@ RESOLVE_SCHEMA = {
         },
     },
     "required": ["resolutions"],
+    "additionalProperties": False,
+}
+
+SUFFICIENCY_CHECK_PROMPT = """A reply was just generated for the user below.
+Judge whether it actually answers what was asked, using only the context
+that was available when it was written.
+
+User asked: {user_message}
+
+Context that was available (recalled memory, search results, etc.):
+{context_summary}
+
+Reply generated:
+---
+{reply}
+---
+
+Judge one of three outcomes:
+- "answer": the reply genuinely answers the question with what was
+  available — release it as-is, even if imperfect or appropriately hedged.
+- "clarify": the reply can't actually be completed because something only
+  the USER can supply is missing — an ambiguous preference, an unstated
+  constraint, a choice between real options. Don't choose this just
+  because the reply could theoretically be improved with more research;
+  only when the gap is something only the user knows.
+- "search_more": the reply is missing something a further lookup could
+  plausibly supply — a fact that exists somewhere but wasn't retrieved
+  this turn.
+
+Default to "answer" unless there's a clear, specific reason not to — most
+replies are fine. Only flag clarify/search_more for a real, nameable gap,
+not stylistic imperfection.
+
+Return JSON only:
+{{"verdict": "answer", "reason": null}}
+or
+{{"verdict": "clarify", "reason": "one line naming exactly what's missing and unresolvable without asking"}}
+or
+{{"verdict": "search_more", "reason": "one line naming what's missing"}}"""
+
+SUFFICIENCY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["answer", "clarify", "search_more"]},
+        "reason": {"type": ["string", "null"]},
+    },
+    "required": ["verdict", "reason"],
     "additionalProperties": False,
 }
 
@@ -724,6 +768,35 @@ def purge_unit(unit_hash: str) -> bool:
     except Exception as e:
         logger.warning(f"purge_unit failed for {unit_hash!r}: {e!r}")
         return False
+
+def check_reply_sufficiency(provider, user_message: str, reply: str, context_summary: str) -> dict:
+    """Fresh-context verify pass on the REPLY itself — the same fresh-
+    context-verifier principle already applied to captured facts
+    (_verify_unit) and standing corrections (check_correction_compliance),
+    extended to the one place it was previously missing: does this answer
+    actually address what was asked, given what was actually available.
+    Fails open to 'answer' on any error — holding a reply indefinitely on
+    a classifier failure is worse than occasionally missing a real gap."""
+    prompt = SUFFICIENCY_CHECK_PROMPT.format(
+        user_message=user_message, context_summary=context_summary or "(none)", reply=reply,
+    )
+    try:
+        if provider.supports_structured_output:
+            result = provider.complete_json(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": "Judge."}],
+                CAPTURE_MODEL, schema=SUFFICIENCY_SCHEMA, schema_name="sufficiency_check",
+            )
+        else:
+            raw = "".join(provider.stream(
+                [{"role": "system", "content": prompt}, {"role": "user", "content": "Judge."}],
+                CAPTURE_MODEL,
+            ))
+            result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+        logger.info(f"sufficiency check: result={result}")
+        return result
+    except Exception as e:
+        logger.warning(f"check_reply_sufficiency failed: {e!r} — treating as sufficient (fail open)")
+        return {"verdict": "answer", "reason": None}
 
 CORRECTION_CHECK_PROMPT = """The user has these standing behavioral
 corrections that MUST be followed in every reply:

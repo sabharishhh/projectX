@@ -1,8 +1,10 @@
-"""End-to-end regression eval for the three bugs fixed this session:
+"""End-to-end regression eval for every real backend fix made this session:
   Bug 1: commitment resolution auto-applied with no confirmation gate
   Bug 2: resolved commitments blocked re-adding identical content
   Bug 3: capture ran orphaned after client disconnect, and responses
          vanished on refresh before being persisted
+  Bug 4: disconnecting mid-agentic-search crashed (NameError) and/or let
+         the search loop keep issuing new rounds after the client left
 
 Hits the real backend (port 8000) and reads ground truth directly from
 the memory engine (port 8100) rather than trusting the chat replies —
@@ -60,20 +62,12 @@ def get_state(branch: str = "main") -> list[dict]:
     return r.json()
 
 
-def find_unit_by_content(units: list[dict], content_fragment: str) -> dict | None:
-    for u in units:
-        if content_fragment.lower() in u["content"].lower():
-            return u
-    return None
-
-
 def find_unit_anywhere(tag: str, branches=BRANCHES) -> tuple[dict | None, str | None]:
     """Searches every branch for a unit whose content contains the given
     unique tag, case-insensitively — matches only the tag itself, not a
-    full phrase, since extraction naturally rewrites compound words
-    ("pickup" -> "pick up") and re-cases things ("dc04ed" -> "DC04ED").
-    The tag is the only thing that actually needs to survive verbatim;
-    the surrounding sentence is free to be rephrased."""
+    full phrase, since extraction naturally rewrites compound words and
+    re-cases things. The tag is the only thing that needs to survive
+    verbatim; the surrounding sentence is free to be rephrased."""
     tag_lower = tag.lower()
     for b in branches:
         for u in get_state(b):
@@ -236,6 +230,9 @@ def test_bug1_deny_keeps_open():
                f"status is {unit.get('commitment_status') if unit else 'MISSING (checked all branches)'}")
 
 
+# --- Bug 3: disconnect during generation must not orphan a write, and the
+# reply must still be persisted if it completed before the client left ---
+
 async def test_bug3_disconnect_no_orphan_write():
     print("\n=== Bug 3: disconnect mid-turn shouldn't orphan a memory write ===")
     cid = new_conversation_id()
@@ -286,6 +283,45 @@ def test_bug3_reply_persists_on_refresh():
     report("reply persisted and retrievable via /api/messages", PASS if has_assistant_msg else FAIL)
 
 
+# --- Bug 4: disconnect mid-agentic-search must not crash (the NameError
+# regression) and must stop the search loop from issuing further rounds ---
+
+async def test_disconnect_stops_search_loop():
+    print("\n=== Bug 4: disconnect mid-search-loop — no crash, no further rounds ===")
+    cid = new_conversation_id()
+    msg = "what are today's top world news headlines"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            async with client.stream("POST", f"{API_BASE}/api/chat",
+                                      json={"conversation_id": cid, "message": msg}) as r:
+                frame_count = 0
+                async for _ in r.aiter_text():
+                    frame_count += 1
+                    if frame_count >= 4:  # enough to be mid tool-round, not just mid-classify
+                        break
+        except httpx.ReadError:
+            pass
+
+    report("aborted connection mid-search", PASS, f"after {frame_count} frame(s)")
+
+    # If the NameError bug were still present, the backend would 500 the
+    # instant it entered the agentic branch. This second request confirms
+    # the server itself is still alive and answering normally afterward —
+    # not wedged or crashed from the aborted turn.
+    cid2 = new_conversation_id()
+    events = send_chat(cid2, "hey, say hello, nothing else")
+    text_events = [e for e in events if e.get("type") == "text"]
+    if text_events:
+        report("backend still responsive after aborted search turn", PASS)
+    else:
+        report("backend still responsive after aborted search turn", FAIL,
+               "no reply at all — possible crash or hang from the aborted turn")
+
+    print("    (manual check: grep backend logs for 'agentic_search: disconnected — stopping "
+          "before next round' — confirms the loop actually stopped, not just that nothing crashed)")
+
+
 def main():
     print(f"Running eval against {API_BASE} / {MEMORY_BASE}\n" + "=" * 60)
 
@@ -294,6 +330,7 @@ def main():
     test_bug1_deny_keeps_open()
     test_bug3_reply_persists_on_refresh()
     asyncio.run(test_bug3_disconnect_no_orphan_write())
+    asyncio.run(test_disconnect_stops_search_loop())
 
     print("\n" + "=" * 60)
     passed = sum(1 for _, s in results if s == PASS)

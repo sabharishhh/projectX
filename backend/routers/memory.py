@@ -114,4 +114,5 @@ def resolve_commitment_confirmation(req: CommitmentResolutionRequest):
             ledger.log("commitment_resolved", f"{p['status']}: {p['unit']['content']}", p["source"], actor="user")
         else:
             ledger.log("commitment_resolution_declined", f"kept open: {p['unit']['content']}", p["source"], actor="user")
+        db.mark_commitment_resolution_status(p["source"], req.resolution_id, req.choice)
     return {"ok": ok}

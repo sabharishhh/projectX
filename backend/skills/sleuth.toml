@@ -1,7 +1,7 @@
 name = "sleuth"
 description = "Investigating a topic, gathering current information, comparing options, fact-finding — including recalling exactly what you've told me before."
 
-tools = ["web_search", "web_fetch", "memory_search"]
+tools = ["web_search", "web_fetch", "memory_search", "list_open_commitments"]
 boost_types = ["project", "decision"]
 
 system_prompt = """

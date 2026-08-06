@@ -94,7 +94,7 @@
   
   .icon-btn:hover {
     background: var(--surface-sunken);
-    color: var(--text-primary);
+    color: var(--accent-memory);
   }
 
   .new-chat {
@@ -111,7 +111,9 @@
     cursor: pointer;
   }
   .new-chat:hover {
-    opacity: 0.9;
+    opacity: 1.0;
+    color: var(--surface-page);
+    background: var(--accent-attention);
   }
   .list {
     flex: 1;
