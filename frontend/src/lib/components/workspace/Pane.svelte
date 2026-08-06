@@ -7,10 +7,6 @@
   let { pane } = $props();
   let isDragOver = $state(false);
 
-  function handleReorder(fromId, toId, side) {
-    reorderTabs(pane.id, fromId, toId, side);
-  }
-
   function handleCrossPaneDrop(sourcePaneId, chatId, targetPaneId, targetChatId, side) {
     moveTabToPane(sourcePaneId, chatId, targetPaneId, targetChatId, side);
   }
@@ -24,7 +20,7 @@
   }
 
   function titleFor(chatId) {
-    return globalMemory.conversations.find((c) => c.conversation_id === chatId)?.label ?? "New Session";
+    return globalMemory.conversations.find((c) => c.conversation_id === chatId)?.label ?? "Untitled";
   }
 
   function handleDrop(e) {

@@ -39,8 +39,10 @@ export function getSession(chatId: string, API_BASE = DEFAULT_API_BASE): ChatSes
 }
 
 export async function clearChat(chatId: string, API_BASE: string) {
+  const session = getSession(chatId);
+  if (session.streaming) return;
   await fetch(`${API_BASE}/api/messages/${chatId}`, { method: "DELETE" });
-  getSession(chatId).messages = [];
+  session.messages = [];
 }
 
 export function closeSession(chatId: string) {
@@ -111,6 +113,7 @@ export async function sendMessage(
         if (!line.startsWith("data: ")) continue;
         const ev = JSON.parse(line.slice(6));
         const msg = session.messages[i];
+        if (!msg) continue; // chat was cleared out from under this in-flight stream
 
         if (ev.type === "text") {
           if (msg.settledAt == null) msg.settledAt = Date.now();
@@ -131,12 +134,12 @@ export async function sendMessage(
     }
   } catch (e: any) {
     session.processing = false;
+    const msg = session.messages[i];
     if (e instanceof StreamIdleTimeoutError) {
-      session.messages[i].error =
-        "Lost connection to the server. Please try sending your message again.";
+      if (msg) msg.error = "Lost connection to the server. Please try sending your message again.";
       try { reader?.cancel(); } catch { /* connection may already be dead */ }
-    } else {
-      session.messages[i].error = e.message || "Something went wrong. Please try again.";
+    } else if (msg) {
+      msg.error = e.message || "Something went wrong. Please try again.";
     }
   }
   session.processing = false;

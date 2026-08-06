@@ -135,8 +135,11 @@ export function reorderTabs(paneId, fromChatId, toChatId, side) {
   const fromIndex = arr.indexOf(fromChatId);
   if (fromIndex === -1) return;
   arr.splice(fromIndex, 1);
-  let toIndex = arr.indexOf(toChatId);
-  if (toIndex === -1) { arr.splice(fromIndex, 0, fromChatId); return; }
+  // No specific drop target (dropped on empty bar space) — same convention
+  // as moveTabToPane's cross-pane case: send it to the end, not back to
+  // where it started.
+  let toIndex = toChatId ? arr.indexOf(toChatId) : arr.length;
+  if (toIndex === -1) toIndex = arr.length;
   if (side === 'after') toIndex += 1;
   arr.splice(toIndex, 0, fromChatId);
 }
