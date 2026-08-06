@@ -56,11 +56,16 @@ def find_conflicts(provider, from_branch: str, into_branch: str,
     except Exception:
         return []
 
-    by_hash = {u["hash"]: u for u in incoming + existing}
     resolved = []
     for p in pairs:
-        inc = next((u for u in incoming if u["hash"].startswith(p["incoming_hash"])), None)
-        exi = next((u for u in existing if u["hash"].startswith(p["existing_hash"])), None)
+        if not isinstance(p, dict):
+            continue
+        incoming_hash = p.get("incoming_hash")
+        existing_hash = p.get("existing_hash")
+        if not incoming_hash or not existing_hash:
+            continue
+        inc = next((u for u in incoming if u["hash"].startswith(incoming_hash)), None)
+        exi = next((u for u in existing if u["hash"].startswith(existing_hash)), None)
         if inc and exi:
             resolved.append({"incoming": inc, "existing": exi, "reason": p.get("reason", "")})
     return resolved

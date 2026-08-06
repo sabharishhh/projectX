@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,6 +21,11 @@ pub enum StoreError {
     Regex(regex::Error),
     Corrupted(String, String), // (expected_hash, actual_hash) — content read from
     // a hash-addressed path no longer matches that hash
+    InvalidHash(String), // not a well-formed content hash (empty, non-hex, too short)
+    HeadMoved(String), // branch name — commit's parent no longer matches HEAD,
+    // another writer committed to this branch first
+    HashStillLive(String), // hash — purge was requested for a unit still
+    // referenced by some branch's current state
 }
 
 impl From<io::Error> for StoreError {
@@ -57,6 +63,16 @@ pub struct MemoryStore {
     root: PathBuf,
     objects_dir: PathBuf,
     bm25: BM25Store,
+    // Serializes every mutation that does read-current-state-then-write
+    // (commit/set_head, entity index, edges index, purge) against every
+    // other such mutation on this store, process-wide. Without it, two
+    // concurrent writers can both read the same HEAD and both write —
+    // the second write silently wins and the first commit becomes
+    // unreachable. A single coarse-grained mutex is enough here: this
+    // store backs one process's personal memory, not a high-throughput
+    // multi-tenant system, so serializing all writes costs nothing
+    // observable while making every mutation safe by construction.
+    write_lock: Mutex<()>,
 }
 
 impl MemoryStore {
@@ -65,7 +81,7 @@ impl MemoryStore {
         let objects_dir = root.join("objects");
         fs::create_dir_all(&objects_dir)?;
         let bm25 = BM25Store::new(&root);
-        Ok(Self { root, objects_dir, bm25 })
+        Ok(Self { root, objects_dir, bm25, write_lock: Mutex::new(()) })
     }
 
     // --- units ---
@@ -114,17 +130,30 @@ impl MemoryStore {
     }
 
     pub fn set_head(&self, branch: &str, hash: &str) -> Result<(), StoreError> {
-        let path = self.ref_path(branch);
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(path, hash)?;
-        Ok(())
+        atomic_write(&self.ref_path(branch), hash.as_bytes())
     }
 
     /// Writes a commit and moves the given branch's HEAD to it. Also checks
     /// whether this commit is due for a checkpoint (see maybe_checkpoint) —
     /// keeps state_at()'s replay bounded as history grows, transparently,
     /// with no change to this method's callers or return value.
+    ///
+    /// Holds `write_lock` for its whole read-HEAD/write-HEAD span and
+    /// verifies `commit.parent` still matches HEAD before writing — without
+    /// both, two concurrent commits on the same branch can each read the
+    /// same HEAD and each write; the second `set_head` silently wins and
+    /// the first commit becomes unreachable (never showing up in
+    /// `current_state`/`state_at` again, despite being on disk). With the
+    /// check, the loser gets `StoreError::HeadMoved` back and can retry
+    /// against the new HEAD instead of silently disappearing.
     pub fn commit(&self, branch: &str, commit: &Commit) -> Result<String, StoreError> {
+        let _guard = self.write_lock.lock().unwrap();
+
+        let current_head = self.head(branch)?;
+        if current_head != commit.parent {
+            return Err(StoreError::HeadMoved(branch.to_string()));
+        }
+
         let hash = self.put_commit(commit)?;
         self.set_head(branch, &hash)?;
         self.maybe_checkpoint(&hash)?;
@@ -174,10 +203,7 @@ impl MemoryStore {
     }
 
     fn save_entity_index(&self, index: &HashMap<String, String>) -> Result<(), StoreError> {
-        let path = self.entity_index_path();
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(path, serde_json::to_vec(index)?)?;
-        Ok(())
+        atomic_write(&self.entity_index_path(), &serde_json::to_vec(index)?)
     }
 
     /// Looks up an existing entity by name+type on a branch. Returns the
@@ -198,6 +224,7 @@ impl MemoryStore {
     /// content-addressed object (entities are otherwise immutable, same as
     /// units), then repoints the mutable index entry at the new hash.
     pub fn put_entity(&self, name: &str, entity_type: EntityType, new_alias: Option<&str>) -> Result<String, StoreError> {
+        let _guard = self.write_lock.lock().unwrap();
         let key = Entity::resolution_key(name, entity_type);
         let mut index = self.load_entity_index()?;
 
@@ -240,6 +267,7 @@ impl MemoryStore {
     /// they're auxiliary retrieval and relationship structure, not
     /// versioned facts, so no history replay or checkpointing needed.
     pub fn put_edge(&self, edge: &Edge) -> Result<String, StoreError> {
+        let _guard = self.write_lock.lock().unwrap();
         let hash = self.put_object(edge)?;
         let path = self.edges_index_path();
         let mut hashes: Vec<String> = match fs::read(&path) {
@@ -249,8 +277,7 @@ impl MemoryStore {
         };
         if !hashes.contains(&hash) {
             hashes.push(hash.clone());
-            fs::create_dir_all(path.parent().unwrap())?;
-            fs::write(&path, serde_json::to_vec(&hashes)?)?;
+            atomic_write(&path, &serde_json::to_vec(&hashes)?)?;
         }
         Ok(hash)
     }
@@ -293,7 +320,10 @@ impl MemoryStore {
     }
 
     pub fn has(&self, hash: &str) -> bool {
-        self.path_for(hash).exists()
+        match self.path_for(hash) {
+            Ok(path) => path.exists(),
+            Err(_) => false, // malformed hash can never exist
+        }
     }
 
     // --- checkpointing ---
@@ -311,10 +341,7 @@ impl MemoryStore {
     }
 
     fn save_checkpoint(&self, commit_hash: &str, live: &[String]) -> Result<(), StoreError> {
-        let path = self.checkpoint_path(commit_hash);
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(path, serde_json::to_vec(live)?)?;
-        Ok(())
+        atomic_write(&self.checkpoint_path(commit_hash), &serde_json::to_vec(live)?)
     }
 
     /// Walks backward at most CHECKPOINT_INTERVAL commits from `commit_hash`,
@@ -507,7 +534,7 @@ impl MemoryStore {
     fn put_object<T: Serialize>(&self, value: &T) -> Result<String, StoreError> {
         let json = serde_json::to_vec(value)?;
         let hash = hash_bytes(&json);
-        let path = self.path_for(&hash);
+        let path = self.path_for(&hash)?; // hash_bytes always yields a valid hex hash
         if !path.exists() {
             fs::create_dir_all(path.parent().unwrap())?;
             fs::write(&path, &json)?;
@@ -521,7 +548,7 @@ impl MemoryStore {
     /// partial write from a crash mid-save, or manual tampering, instead
     /// of silently deserializing whatever's actually on disk.
     fn get_object<T: DeserializeOwned>(&self, hash: &str) -> Result<T, StoreError> {
-        let bytes = fs::read(self.path_for(hash))?;
+        let bytes = fs::read(self.path_for(hash)?)?;
         let actual = hash_bytes(&bytes);
         if actual != hash {
             return Err(StoreError::Corrupted(hash.to_string(), actual));
@@ -529,20 +556,46 @@ impl MemoryStore {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    fn path_for(&self, hash: &str) -> PathBuf {
-        self.objects_dir.join(&hash[..2]).join(&hash[2..])
+    /// Validates before slicing — `hash` can be arbitrary, unauthenticated
+    /// caller-supplied text (e.g. `/purge`'s request body), and byte-index
+    /// slicing on it directly used to panic the whole process on an empty
+    /// string or a hash shorter than 2 bytes, or on a multi-byte UTF-8
+    /// character straddling the split point (`&hash[..2]` panics with
+    /// "not a char boundary" if byte 2 isn't one). Requiring ASCII hex
+    /// digits rules out both: hex digits are single-byte, so any byte
+    /// index within the string is automatically a char boundary.
+    fn path_for(&self, hash: &str) -> Result<PathBuf, StoreError> {
+        if hash.len() < 3 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(StoreError::InvalidHash(hash.to_string()));
+        }
+        Ok(self.objects_dir.join(&hash[..2]).join(&hash[2..]))
     }
 
-    fn embedding_path(&self, hash: &str) -> PathBuf {
-        self.objects_dir.join(&hash[..2]).join(format!("{}.emb", &hash[2..]))
+    fn embedding_path(&self, hash: &str) -> Result<PathBuf, StoreError> {
+        if hash.len() < 3 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(StoreError::InvalidHash(hash.to_string()));
+        }
+        Ok(self.objects_dir.join(&hash[..2]).join(format!("{}.emb", &hash[2..])))
     }
 
-    /// Permanently removes a unit's content from disk. Safe to call once a
-    /// unit is already out of HEAD (superseded) — nothing in state
-    /// resolution ever re-fetches a superseded unit's content, only its
-    /// hash inside historical commit records, so this can't break replay.
+    /// Permanently removes a unit's content from disk. Only safe once a
+    /// unit is genuinely out of every branch's HEAD (soft-forgotten) —
+    /// callers were previously just "expected" to ensure that themselves,
+    /// with nothing enforcing it; purging a unit that's still live left
+    /// every future `state_at`/`current_state` call on that branch hard-
+    /// failing (`get` on a hash whose object file is now gone). Checking
+    /// here, under the same write_lock as commit(), makes that ordering a
+    /// guarantee instead of a caller convention, and closes the window
+    /// where a concurrent commit could re-add the hash between the check
+    /// and the delete.
     pub fn purge_object(&self, hash: &str) -> Result<(), StoreError> {
-        let path = self.path_for(hash);
+        let _guard = self.write_lock.lock().unwrap();
+        for branch in self.list_branches()? {
+            if self.current_state(&branch)?.iter().any(|(h, _)| h == hash) {
+                return Err(StoreError::HashStillLive(hash.to_string()));
+            }
+        }
+        let path = self.path_for(hash)?;
         if path.exists() {
             fs::remove_file(path)?;
         }
@@ -553,7 +606,7 @@ impl MemoryStore {
     /// `put`) — never needs re-calling for the same hash, since content
     /// is immutable once hashed.
     pub fn put_embedding(&self, hash: &str, embedding: &[f32]) -> Result<(), StoreError> {
-        let path = self.embedding_path(hash);
+        let path = self.embedding_path(hash)?;
         fs::create_dir_all(path.parent().unwrap())?;
         let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
         fs::write(path, bytes)?;
@@ -561,7 +614,7 @@ impl MemoryStore {
     }
 
     pub fn get_embedding(&self, hash: &str) -> Result<Option<Vec<f32>>, StoreError> {
-        match fs::read(self.embedding_path(hash)) {
+        match fs::read(self.embedding_path(hash)?) {
             Ok(bytes) => Ok(Some(
                 bytes
                     .chunks_exact(4)
@@ -590,6 +643,27 @@ impl MemoryStore {
         Ok(out)
     }
 
+}
+
+/// Write-to-temp-then-rename. Applies to every *mutable* file this store
+/// maintains (refs/HEAD, entity index, edges index, checkpoints) — unlike
+/// content-addressed objects, these get overwritten in place and have no
+/// hash to self-verify on read, so a plain `fs::write` that crashes or
+/// loses power mid-write leaves a truncated file with no way to detect
+/// the corruption later (a truncated HEAD hash fails `get_commit` with a
+/// confusing "Corrupted"/not-found error; a truncated index.json fails
+/// `serde_json` parsing and hard-fails the whole entity/edge subsystem).
+/// `rename` on the same filesystem is atomic, so a crash mid-write leaves
+/// either the old file or the new one, never a partial one.
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp");
+    let tmp_path = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+    fs::write(&tmp_path, bytes)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {

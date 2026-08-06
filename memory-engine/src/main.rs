@@ -457,7 +457,7 @@ async fn retrieve(
         .zip(rerank_scores)
         .map(|((hash, unit), score)| (hash, unit, score))
         .collect();
-    reranked.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+    reranked.sort_by(|a, b| b.2.total_cmp(&a.2));
 
     // Unvalidated starting guess: relevant facts have scored 0.15–0.59 in
     // testing so far; clearly irrelevant ones 0.0001–0.03. Needs real tuning

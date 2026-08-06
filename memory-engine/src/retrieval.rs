@@ -38,7 +38,7 @@ pub fn rank_by_relevance<T: Retrievable>(
             RankedItem { item, dense_score }
         })
         .collect();
-    ranked.sort_by(|a, b| b.dense_score.partial_cmp(&a.dense_score).unwrap());
+    ranked.sort_by(|a, b| b.dense_score.total_cmp(&a.dense_score));
     ranked
 }
 
@@ -115,6 +115,6 @@ pub fn score(
         })
         .collect();
 
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    scored.sort_by(|a, b| b.score.total_cmp(&a.score));
     scored
 }
